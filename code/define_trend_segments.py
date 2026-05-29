@@ -6,14 +6,15 @@ import matplotlib.pyplot as plt
 # 参数设置
 # =========================
 
-symbol = "LC"
+symbol = "AL"
 data_path = f"../data/{symbol}.csv"
 
-threshold_window = 120
+threshold_window = 30
 threshold_quantile = 0.9
 threshold_multiplier = 3
 min_threshold = 0.04
-max_threshold = 0.15
+max_threshold = 0.10
+initial_threshold = min_threshold
 
 min_trend_days = 5
 
@@ -67,36 +68,45 @@ daily["speculation"] = np.log(
 # =========================
 # 4. 用波段高低点定义趋势段
 # =========================
-def get_dynamic_threshold(daily, window, quantile, multiplier,
-                          min_threshold, max_threshold):
+def add_dynamic_threshold(daily, window, quantile, multiplier,
+                          min_threshold, max_threshold,
+                          initial_threshold):
     """
-    根据历史价格波动，自动计算趋势反转阈值。
+    根据历史价格波动，为每天计算趋势反转阈值。
 
     逻辑：
     1. 先计算每日收益率，取绝对值，只看波动大小，不看涨跌方向；
-    2. 用最近 window 天的 quantile 分位数代表“较大的正常波动”；
-    3. 再乘以 multiplier，作为趋势反转阈值；
-    4. 最后限制在 min_threshold 和 max_threshold 之间。
+    2. 用过去 window 天的 quantile 分位数代表“较大的正常波动”；
+    3. shift(1)，保证今天的阈值只使用昨天及以前的数据；
+    4. 再乘以 multiplier，作为趋势反转阈值；
+    5. 最后限制在 min_threshold 和 max_threshold 之间。
     """
 
     abs_return = daily["close"].pct_change().abs()
 
-    recent_abs_return = abs_return.tail(window).dropna()
+    threshold = (
+        abs_return
+        .rolling(window=window) # 比如 window=30，意思是每一天都看它前后对应窗口里的 30 天数据。
+        .quantile(quantile) # 在每个滚动窗口里取分位数。
+        .shift(1) # 它保证今天的阈值只能使用昨天及以前的数据，不能偷看今天的数据。
+        * multiplier 
+    )
 
-    base_move = recent_abs_return.quantile(quantile)
+    initial_threshold = min_threshold
+    
+    # 把算好的阈值放进 daily 数据表里，新增一列 threshold。
+    daily["threshold"] = (
+        threshold
+        .clip(lower=min_threshold, upper=max_threshold)
+        .fillna(initial_threshold)
+    )
 
-    threshold = base_move * multiplier
 
-    threshold = max(min_threshold, min(threshold, max_threshold))
-
-    return threshold
-
-
-def find_trend_segments(daily, threshold, min_days):
+def find_trend_segments(daily, min_days):
     """
     用波段高低点定义趋势段。根据每日收盘价，找出上涨趋势段和下跌趋势段。
 
-    threshold 表示：
+    daily["threshold"] 表示每天使用的动态阈值：
     上涨后从高点回撤超过该阈值，确认上涨段结束；
     下跌后从低点反弹超过该阈值，确认下跌段结束。
 
@@ -105,6 +115,7 @@ def find_trend_segments(daily, threshold, min_days):
     """
 
     prices = daily["close"].values
+    thresholds = daily["threshold"].values
 
     # 记录重要拐点的位置
     pivot_indices = [0]
@@ -118,19 +129,21 @@ def find_trend_segments(daily, threshold, min_days):
     pivot_price = prices[0]
 
     extreme_index = 0
-    extreme_price = prices[0]
+    extreme_price = prices[0] # 一开始极值点就是第 0 天。
 
     def start_new_direction(new_direction, i, price, update_pivot=False):
+        ### 当趋势方向发生变化，更新当前状态 ###
         nonlocal direction, extreme_index, extreme_price, pivot_price
 
-        direction = new_direction
-        extreme_index = i
+        direction = new_direction # 1 表示上涨波段，-1 表示下跌波段
+        extreme_index = i # 新趋势刚开始时，当前点暂时就是这个新趋势里的极值点。
         extreme_price = price
 
-        if update_pivot:
+        if update_pivot: # 是否要更新 pivot_price，发生在趋势反转确认之后
             pivot_price = price
 
     def update_extreme(i, price):
+        ### 作用是：在当前趋势中，更新最高点或最低点 ###
         nonlocal extreme_index, extreme_price
 
         if direction == 1 and price > extreme_price:
@@ -144,6 +157,7 @@ def find_trend_segments(daily, threshold, min_days):
     for i in range(1, len(daily)):
 
         price = prices[i]
+        threshold = thresholds[i]
 
         # =========================
         # 还没有确认方向
@@ -217,12 +231,6 @@ def find_trend_segments(daily, threshold, min_days):
         days = end_i - start_i + 1
         total_return = (end_price - start_price) / start_price
 
-        if days < min_days:
-            continue
-
-        if abs(total_return) < threshold:
-            continue
-
         if total_return > 0:
             trend = "up_trend"
         else:
@@ -235,10 +243,18 @@ def find_trend_segments(daily, threshold, min_days):
             signal_i = signal_indices[j]
             signal_date = daily.loc[signal_i, "date"]
             signal_close = prices[signal_i]
+            segment_threshold = thresholds[signal_i]
         else:
             signal_i = np.nan
             signal_date = pd.NaT
             signal_close = np.nan
+            segment_threshold = thresholds[end_i]
+
+        if days < min_days:
+            continue
+
+        if abs(total_return) < segment_threshold:
+            continue
 
         segment_rows.append({
             "segment_id": len(segment_rows) + 1,
@@ -254,6 +270,7 @@ def find_trend_segments(daily, threshold, min_days):
             # 这个点是“确认趋势结束”的点
             "end_signal_date": signal_date,
             "end_signal_close": signal_close,
+            "threshold": segment_threshold,
 
             "start_close": start_price,
             "end_close": end_price,
@@ -272,20 +289,23 @@ def find_trend_segments(daily, threshold, min_days):
     return segments
 
 
-dynamic_threshold = get_dynamic_threshold(
+add_dynamic_threshold(
     daily,
     window=threshold_window,
     quantile=threshold_quantile,
     multiplier=threshold_multiplier,
     min_threshold=min_threshold,
-    max_threshold=max_threshold
+    max_threshold=max_threshold,
+    initial_threshold=initial_threshold
 )
 
-print(f"本次使用的动态阈值为：{dynamic_threshold:.2%}")
+print(
+    "本次使用动态阈值，范围为："
+    f"{daily['threshold'].min():.2%} - {daily['threshold'].max():.2%}"
+)
 
 segments = find_trend_segments(
     daily,
-    threshold=dynamic_threshold,
     min_days=min_trend_days
 )
 
