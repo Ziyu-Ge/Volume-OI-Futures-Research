@@ -7,12 +7,28 @@ import matplotlib.pyplot as plt
 # =========================
 
 symbol = "LC"
+data_path = f"../data/{symbol}.csv"
+
+threshold_window = 120
+threshold_quantile = 0.9
+threshold_multiplier = 3
+min_threshold = 0.04
+max_threshold = 0.15
+
+min_trend_days = 5
+
+plot_figsize = (16, 7)
+plot_dpi = 300
+
+trend_figure_path = f"../results/figures/{symbol}_trend_segments.png"
+daily_output_path = f"../results/tables/{symbol}_daily_with_trend.csv"
+segments_output_path = f"../results/tables/{symbol}_trend_segments.csv"
 
 # =========================
 # 1. 读取分钟数据
 # =========================
 
-df = pd.read_csv(f"../data/{symbol}.csv")
+df = pd.read_csv(data_path)
 
 df["datetime"] = pd.to_datetime(df["datetime"])
 df = df.sort_values("datetime")
@@ -51,17 +67,41 @@ daily["speculation"] = np.log(
 # =========================
 # 4. 用波段高低点定义趋势段
 # =========================
+def get_dynamic_threshold(daily, window, quantile, multiplier,
+                          min_threshold, max_threshold):
+    """
+    根据历史价格波动，自动计算趋势反转阈值。
 
-def find_trend_segments(daily, threshold=0.08, min_days=5):
+    逻辑：
+    1. 先计算每日收益率，取绝对值，只看波动大小，不看涨跌方向；
+    2. 用最近 window 天的 quantile 分位数代表“较大的正常波动”；
+    3. 再乘以 multiplier，作为趋势反转阈值；
+    4. 最后限制在 min_threshold 和 max_threshold 之间。
+    """
+
+    abs_return = daily["close"].pct_change().abs()
+
+    recent_abs_return = abs_return.tail(window).dropna()
+
+    base_move = recent_abs_return.quantile(quantile)
+
+    threshold = base_move * multiplier
+
+    threshold = max(min_threshold, min(threshold, max_threshold))
+
+    return threshold
+
+
+def find_trend_segments(daily, threshold, min_days):
     """
     用波段高低点定义趋势段。根据每日收盘价，找出上涨趋势段和下跌趋势段。
 
-    threshold = 0.08 表示：
-    上涨后从高点回撤超过 8%，确认上涨段结束；
-    下跌后从低点反弹超过 8%，确认下跌段结束。
+    threshold 表示：
+    上涨后从高点回撤超过该阈值，确认上涨段结束；
+    下跌后从低点反弹超过该阈值，确认下跌段结束。
 
-    min_days = 5 表示：
-    少于 5 个交易日的波段不作为正式趋势段。
+    min_days 表示：
+    少于该交易日数量的波段不作为正式趋势段。
     """
 
     prices = daily["close"].values
@@ -232,10 +272,21 @@ def find_trend_segments(daily, threshold=0.08, min_days=5):
     return segments
 
 
+dynamic_threshold = get_dynamic_threshold(
+    daily,
+    window=threshold_window,
+    quantile=threshold_quantile,
+    multiplier=threshold_multiplier,
+    min_threshold=min_threshold,
+    max_threshold=max_threshold
+)
+
+print(f"本次使用的动态阈值为：{dynamic_threshold:.2%}")
+
 segments = find_trend_segments(
     daily,
-    threshold=0.08,
-    min_days=5
+    threshold=dynamic_threshold,
+    min_days=min_trend_days
 )
 
 
@@ -268,7 +319,7 @@ def plot_trend_segments(daily, segments, save_path=None):
     2. 每个波段结束的确认点。
     """
 
-    plt.figure(figsize=(16, 7))
+    plt.figure(figsize=plot_figsize)
 
     # 先画完整收盘价，作为背景
     plt.plot(
@@ -369,7 +420,7 @@ def plot_trend_segments(daily, segments, save_path=None):
     plt.tight_layout()
 
     if save_path is not None:
-        plt.savefig(save_path, dpi=300)
+        plt.savefig(save_path, dpi=plot_dpi)
 
     plt.close()
 
@@ -377,7 +428,7 @@ def plot_trend_segments(daily, segments, save_path=None):
 plot_trend_segments(
     daily,
     segments,
-    save_path="../results/figures/LC_trend_segments.png"
+    save_path=trend_figure_path
 )
 
 
@@ -385,17 +436,16 @@ plot_trend_segments(
 # 7. 保存结果
 # =========================
 
-daily.to_csv("../results/tables/LC_daily_with_trend.csv", index=False)
-segments.to_csv("../results/tables/LC_trend_segments.csv", index=False)
+daily.to_csv(daily_output_path, index=False)
+segments.to_csv(segments_output_path, index=False)
 
 print("趋势段定义完成。")
-print("每日趋势结果保存为：../results/tables/LC_daily_with_trend.csv")
-print("趋势段汇总保存为：../results/tables/LC_trend_segments.csv")
-print("趋势段图保存为：../results/figures/LC_trend_segments.png")
+print(f"每日趋势结果保存为：{daily_output_path}")
+print(f"趋势段汇总保存为：{segments_output_path}")
+print(f"趋势段图保存为：{trend_figure_path}")
 
 print("\n趋势段预览：")
 print(segments.head(20))
 
 print("\n趋势段数量：")
 print(segments["trend"].value_counts())
-
