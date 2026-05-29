@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -6,7 +7,7 @@ import matplotlib.pyplot as plt
 # 参数设置
 # =========================
 
-symbol = "AL"
+symbol = "LC"
 data_path = f"../data/{symbol}.csv"
 
 threshold_window = 30
@@ -440,6 +441,7 @@ def plot_trend_segments(daily, segments, save_path=None):
     plt.tight_layout()
 
     if save_path is not None:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
         plt.savefig(save_path, dpi=plot_dpi)
 
     plt.close()
@@ -455,6 +457,9 @@ plot_trend_segments(
 # =========================
 # 7. 保存结果
 # =========================
+
+os.makedirs(os.path.dirname(daily_output_path), exist_ok=True)
+os.makedirs(os.path.dirname(segments_output_path), exist_ok=True)
 
 daily.to_csv(daily_output_path, index=False)
 segments.to_csv(segments_output_path, index=False)
