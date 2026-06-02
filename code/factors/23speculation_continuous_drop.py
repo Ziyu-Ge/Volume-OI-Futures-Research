@@ -31,8 +31,7 @@ min_down_window_days = 3  # 统计下降天数所需的最少历史天数
 strictly_negative_diff = True  # True 表示 DeltaSpec < 0 才算下降
 
 # 单因子触发后，建议仓位比例
-# 例如 0.7 表示触发连续回落信号后减仓到 70%
-signal_position_scale = 0.7
+signal_position_scale = 0.5
 
 price_figsize = (12, 6)
 down_days_figsize = (12, 6)

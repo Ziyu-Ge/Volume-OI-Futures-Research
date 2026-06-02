@@ -1,6 +1,9 @@
 import os
 import pandas as pd
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # =========================
@@ -19,8 +22,7 @@ min_history_days = 10  # 最小历史天数
 min_trend_rank_days = 3  # 最小趋势分位数天数
 
 # 单因子触发后，建议仓位比例
-# 例如 0.7 表示触发高投机度信号后减仓到 70%
-signal_position_scale = 0.7
+signal_position_scale = 0.5
 
 price_figsize = (12, 6)
 rank_figsize = (12, 5)

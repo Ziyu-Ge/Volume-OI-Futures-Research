@@ -1,15 +1,19 @@
 import os
 import pandas as pd
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 # =========================
 # 参数设置
 # =========================
 
-symbol = "LC"
+symbol = os.environ.get("SYMBOL", "LC")
 
-factor_id = "22"
-factor_name = "speculation_first_difference"
+factor_id = os.environ.get("FACTOR_ID", "11")
+factor_name = os.environ.get("FACTOR_NAME", "high_speculation")
 # 11 high_speculation
 # 12 speculation_mad
 # 21 speculation_change_rate
@@ -39,14 +43,13 @@ segments_input_path = os.path.join(
     f"{symbol}_trend_segments.csv"
 )
 
-# 如果趋势段文件还在旧位置，则自动读旧路径
-if not os.path.exists(segments_input_path):
-    segments_input_path = os.path.join(
-        project_root,
-        "results",
-        "tables",
-        f"{symbol}_trend_segments.csv"
-    )
+prepared_daily_input_path = os.path.join(
+    project_root,
+    "results",
+    "tables",
+    "daily",
+    f"{symbol}_daily_with_trend.csv"
+)
 
 backtest_daily_output_path = os.path.join(
     project_root,
@@ -89,16 +92,38 @@ if "end_signal_date" in segments.columns:
 
 daily = daily.sort_values("date").reset_index(drop=True)
 
+realtime_columns = [
+    "realtime_trend",
+    "realtime_position",
+    "realtime_segment_id",
+]
+
+missing_realtime_columns = [
+    col for col in realtime_columns
+    if col not in daily.columns
+]
+
+if missing_realtime_columns and os.path.exists(prepared_daily_input_path):
+    prepared_daily = pd.read_csv(prepared_daily_input_path)
+    prepared_daily["date"] = pd.to_datetime(prepared_daily["date"])
+
+    available_realtime_columns = [
+        col for col in missing_realtime_columns
+        if col in prepared_daily.columns
+    ]
+
+    daily = daily.merge(
+        prepared_daily[["date"] + available_realtime_columns],
+        on="date",
+        how="left"
+    )
+
 
 # =========================
 # 2. 生成原始趋势仓位
 # =========================
 
-daily["base_position"] = 0.0
-
-daily.loc[daily["trend"] == "up_trend", "base_position"] = 1.0
-daily.loc[daily["trend"] == "down_trend", "base_position"] = -1.0
-
+daily["base_position"] = daily["realtime_position"]
 
 # =========================
 # 3. 生成单因子减仓仓位
@@ -135,7 +160,7 @@ daily["nav"] = (1 + daily["strategy_return"]).cumprod()
 daily["base_nav"] = (1 + daily["base_strategy_return"]).cumprod()
 
 daily["running_max"] = daily["nav"].cummax()
-daily["drawdown"] = daily["nav"] / daily["running_max"] - 1
+daily["drawdown"] = 1 - daily["nav"] / daily["running_max"]
 
 
 # =========================
@@ -146,7 +171,7 @@ num_days = len(daily)
 
 annual_return = daily["nav"].iloc[-1] ** (annual_days / num_days) - 1
 
-max_drawdown = daily["drawdown"].min()
+max_drawdown = daily["drawdown"].max()
 
 return_std = daily["strategy_return"].std()
 
@@ -322,3 +347,16 @@ print(f"绩效汇总表保存为：{summary_output_path}")
 
 print("\n绩效汇总：")
 print(summary)
+
+base_annual_return = (
+    daily["base_nav"].iloc[-1] ** (annual_days / num_days) - 1
+)
+
+print("因子策略最终净值:", daily["nav"].iloc[-1])
+print("原始趋势策略最终净值:", daily["base_nav"].iloc[-1])
+
+print("因子策略年化收益:", annual_return)
+print("原始趋势策略年化收益:", base_annual_return)
+
+print("因子策略总收益:", daily["nav"].iloc[-1] - 1)
+print("原始趋势策略总收益:", daily["base_nav"].iloc[-1] - 1)

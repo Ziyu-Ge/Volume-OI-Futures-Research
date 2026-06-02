@@ -37,7 +37,7 @@ mad_scale = 1.4826  # 把 MAD 调整到类似标准差的尺度
 mad_epsilon = 1e-12  # 避免 MAD 过小导致除零
 
 # 单因子触发后，建议仓位比例
-signal_position_scale = 0.7
+signal_position_scale = 0.5
 
 price_figsize = (12, 6)
 mad_figsize = (12, 6)

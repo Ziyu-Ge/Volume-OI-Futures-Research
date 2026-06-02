@@ -29,6 +29,7 @@ plot_dpi = 300
 trend_figure_path = f"../results/figures/{symbol}_trend_segments.png"
 daily_output_path = f"../results/tables//daily/{symbol}_daily_with_trend.csv"
 segments_output_path = f"../results/tables//daily/{symbol}_trend_segments.csv"
+realtime_trend_figure_path = (f"../results/figures/{symbol}_realtime_trend_segments.png")
 
 # =========================
 # 1. 读取分钟数据
@@ -293,6 +294,114 @@ def find_trend_segments(daily, min_days):
 
     return segments
 
+def add_realtime_trend_state(daily):
+    """
+    生成真实回测可用的趋势状态。
+
+    核心原则：
+    只根据当天及以前的 close 和 threshold 判断趋势。
+    第 t 天收盘后确认的方向，只能通过 shift(1) 在第 t+1 天交易。
+    """
+
+    prices = daily["close"].values
+    thresholds = daily["threshold"].values
+
+    realtime_trend = []
+    realtime_position = []
+    realtime_segment_id = []
+
+    direction = 0
+    pivot_price = prices[0]
+
+    extreme_price = prices[0]
+
+    segment_id = 0
+
+    for i in range(len(daily)):
+
+        price = prices[i]
+        threshold = thresholds[i]
+
+        if i == 0:
+            realtime_trend.append("no_trend")
+            realtime_position.append(0.0)
+            realtime_segment_id.append(np.nan)
+            continue
+
+        # =========================
+        # 还没有趋势方向
+        # =========================
+        if direction == 0:
+
+            change = (price - pivot_price) / pivot_price
+
+            if change >= threshold:
+                direction = 1
+                extreme_price = price
+                segment_id += 1
+
+            elif change <= -threshold:
+                direction = -1
+                extreme_price = price
+                segment_id += 1
+
+        # =========================
+        # 当前是上涨趋势
+        # =========================
+        elif direction == 1:
+
+            if price > extreme_price:
+                extreme_price = price
+
+            drawdown = (extreme_price - price) / extreme_price
+
+            if drawdown >= threshold:
+                # 到今天收盘，才确认上涨趋势结束
+                # 从今天收盘后，状态切换为下跌观察/下跌趋势
+                direction = -1
+                pivot_price = price
+                extreme_price = price
+                segment_id += 1
+
+        # =========================
+        # 当前是下跌趋势
+        # =========================
+        elif direction == -1:
+
+            if price < extreme_price:
+                extreme_price = price
+
+            rebound = (price - extreme_price) / extreme_price
+
+            if rebound >= threshold:
+                # 到今天收盘，才确认下跌趋势结束
+                direction = 1
+                pivot_price = price
+                extreme_price = price
+                segment_id += 1
+
+        if direction == 1:
+            realtime_trend.append("up_trend")
+            realtime_position.append(1.0)
+            realtime_segment_id.append(segment_id)
+
+        elif direction == -1:
+            realtime_trend.append("down_trend")
+            realtime_position.append(-1.0)
+            realtime_segment_id.append(segment_id)
+
+        else:
+            realtime_trend.append("no_trend")
+            realtime_position.append(0.0)
+            realtime_segment_id.append(np.nan)
+
+    daily["realtime_trend"] = realtime_trend
+    daily["realtime_position"] = realtime_position
+    daily["realtime_segment_id"] = realtime_segment_id
+
+    return daily
+
+
 def add_reversal_window(daily, segments, pre_days=3, post_days=2):
     """
     给每一段趋势定义“趋势反转段”。
@@ -357,6 +466,8 @@ add_dynamic_threshold(
     max_threshold=max_threshold,
     initial_threshold=initial_threshold
 )
+
+daily = add_realtime_trend_state(daily)
 
 print(
     "本次使用动态阈值，范围为："
@@ -511,11 +622,122 @@ def plot_trend_segments(daily, segments, save_path=None):
 
     plt.close()
 
+def plot_realtime_trend_state(daily, save_path=None):
+    """
+    可视化真实回测中能够实时识别的趋势区域。
+
+    和事后趋势段不同：
+    这里画的是 realtime_trend / realtime_segment_id，
+    也就是只根据当天及以前数据得到的趋势状态。
+    """
+
+    plt.figure(figsize=plot_figsize)
+
+    # 先画完整收盘价作为背景
+    plt.plot(
+        daily["date"],
+        daily["close"],
+        color="lightgray",
+        linewidth=1,
+        label="Close Price"
+    )
+
+    shown_up_label = False
+    shown_down_label = False
+    shown_no_label = False
+
+    # 只画有实时趋势编号的区域
+    realtime_segments = (
+        daily.dropna(subset=["realtime_segment_id"])
+        .groupby("realtime_segment_id")
+    )
+
+    for realtime_segment_id, part in realtime_segments:
+
+        if len(part) == 0:
+            continue
+
+        trend = part["realtime_trend"].iloc[0]
+
+        if trend == "up_trend":
+            color = "red"
+            label = "Realtime Up Trend" if not shown_up_label else None
+            shown_up_label = True
+
+        elif trend == "down_trend":
+            color = "green"
+            label = "Realtime Down Trend" if not shown_down_label else None
+            shown_down_label = True
+
+        else:
+            color = "gray"
+            label = "Realtime No Trend" if not shown_no_label else None
+            shown_no_label = True
+
+        # 画真实回测中识别出来的趋势区域
+        plt.plot(
+            part["date"],
+            part["close"],
+            color=color,
+            linewidth=2.5,
+            label=label
+        )
+
+        # 标出实时趋势段起点
+        plt.scatter(
+            part["date"].iloc[0],
+            part["close"].iloc[0],
+            color=color,
+            s=35,
+            edgecolors="black",
+            zorder=5
+        )
+
+        # 标出实时趋势段终点
+        plt.scatter(
+            part["date"].iloc[-1],
+            part["close"].iloc[-1],
+            color=color,
+            s=55,
+            marker="s",
+            edgecolors="black",
+            zorder=5
+        )
+
+        # 在趋势段中间标上实时 segment id
+        mid_i = len(part) // 2
+
+        plt.text(
+            part["date"].iloc[mid_i],
+            part["close"].iloc[mid_i],
+            f"R{int(realtime_segment_id)}",
+            fontsize=9,
+            ha="center",
+            va="bottom"
+        )
+
+    plt.title("Realtime Trend Segments for Backtest")
+    plt.xlabel("Date")
+    plt.ylabel("Close Price")
+    plt.legend()
+    plt.grid(alpha=0.3)
+    plt.tight_layout()
+
+    if save_path is not None:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, dpi=plot_dpi)
+
+    plt.close()
 
 plot_trend_segments(
     daily,
     segments,
     save_path=trend_figure_path
+)
+
+plot_realtime_trend_state(
+    daily,
+    save_path=realtime_trend_figure_path
 )
 
 
@@ -533,6 +755,7 @@ print("趋势段定义完成。")
 print(f"每日趋势结果保存为：{daily_output_path}")
 print(f"趋势段汇总保存为：{segments_output_path}")
 print(f"趋势段图保存为：{trend_figure_path}")
+print(f"真实趋势段图保存为：{realtime_trend_figure_path}")
 
 print("\n趋势段预览：")
 print(segments.head(20))
