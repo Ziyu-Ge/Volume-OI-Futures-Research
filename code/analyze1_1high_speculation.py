@@ -28,6 +28,7 @@ daily_output_path = f"../results/tables/{symbol}_daily_high_speculation_signal.c
 summary_output_path = f"../results/tables/{symbol}_high_speculation_summary.csv"
 price_figure_path = f"../results/figures/{symbol}_high_speculation_signal_on_price.png"
 rank_figure_path = f"../results/figures/{symbol}_speculation_rank_in_trend.png"
+price_speculation_figure_path = f"../results/figures/{symbol}_price_and_speculation.png"
 
 
 # =========================
@@ -230,7 +231,35 @@ plt.close()
 
 
 # =========================
-# 7. 画图：趋势段内投机度分位数
+# 7. 画图：价格和投机度
+# =========================
+
+fig, ax1 = plt.subplots(figsize=price_figsize)
+
+ax1.plot(daily["date"], daily["close"], label="close", color="tab:blue")
+ax1.set_xlabel("Date")
+ax1.set_ylabel("Close Price", color="tab:blue")
+ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+ax2 = ax1.twinx()
+ax2.plot(
+    daily["date"],
+    daily["speculation"],
+    label="speculation",
+    color="tab:orange"
+)
+ax2.set_ylabel("Speculation", color="tab:orange")
+ax2.tick_params(axis="y", labelcolor="tab:orange")
+
+plt.title(f"{symbol} Close Price and Speculation")
+fig.tight_layout()
+
+plt.savefig(price_speculation_figure_path, dpi=plot_dpi)
+plt.close()
+
+
+# =========================
+# 8. 画图：趋势段内投机度分位数
 # =========================
 
 plt.figure(figsize=rank_figsize)
@@ -271,3 +300,4 @@ plt.close()
 print("\n图片保存为：")
 print(price_figure_path)
 print(rank_figure_path)
+print(price_speculation_figure_path)

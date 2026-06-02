@@ -11,11 +11,11 @@ symbol = "LC"
 
 change_days = 1  # 和多少个交易日前相比，计算投机度变化率
 history_window = 20  # 用过去多少个交易日判断变化率是否异常
-high_change_rank_threshold = 0.9  # 变化率处于历史高位的分位数阈值
-low_change_rank_threshold = 0.1  # 变化率处于历史低位的分位数阈值
+high_change_rank_threshold = 0.98  # 变化率处于历史高位的分位数阈值
+low_change_rank_threshold = 0.02  # 变化率处于历史低位的分位数阈值
 min_history_days = 10  # 计算历史分位数所需的最少历史天数
 
-before_end_days = 20  # 趋势结束前观察天数
+before_end_days = 5  # 趋势结束前观察天数
 
 price_figsize = (12, 6)
 change_figsize = (12, 5)
@@ -34,6 +34,9 @@ price_figure_path = (
     f"../results/figures/{symbol}_speculation_change_rate_signal_on_price.png"
 )
 change_figure_path = f"../results/figures/{symbol}_speculation_change_rate.png"
+price_change_figure_path = (
+    f"../results/figures/{symbol}_price_and_speculation_change_rate.png"
+)
 
 
 # =========================
@@ -237,7 +240,46 @@ plt.close()
 
 
 # =========================
-# 7. 画图：投机度变化率
+# 7. 画图：价格和投机度变化率
+# =========================
+
+change_rate_for_plot = daily["speculation_change_rate"].copy()
+change_rate_low = change_rate_for_plot.quantile(0.01)
+change_rate_high = change_rate_for_plot.quantile(0.99)
+change_rate_for_plot = change_rate_for_plot.clip(
+    lower=change_rate_low,
+    upper=change_rate_high
+)
+
+fig, ax1 = plt.subplots(figsize=price_figsize)
+
+ax1.plot(daily["date"], daily["close"], label="close", color="tab:blue")
+ax1.set_xlabel("Date")
+ax1.set_ylabel("Close Price", color="tab:blue")
+ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+ax2 = ax1.twinx()
+ax2.plot(
+    daily["date"],
+    change_rate_for_plot,
+    label="speculation change rate clipped",
+    color="tab:orange"
+)
+ax2.set_ylabel("Speculation Change Rate", color="tab:orange")
+ax2.tick_params(axis="y", labelcolor="tab:orange")
+ax2.axhline(0, color="gray", linewidth=1)
+
+plt.title(f"{symbol} Close Price and Speculation Change Rate")
+ax1.legend(loc="upper left")
+ax2.legend(loc="upper right")
+fig.tight_layout()
+
+plt.savefig(price_change_figure_path, dpi=plot_dpi)
+plt.close()
+
+
+# =========================
+# 8. 画图：投机度变化率
 # =========================
 
 plt.figure(figsize=change_figsize)
@@ -263,3 +305,4 @@ plt.close()
 print("\n图片保存为：")
 print(price_figure_path)
 print(change_figure_path)
+print(price_change_figure_path)
