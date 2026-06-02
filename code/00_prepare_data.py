@@ -10,21 +10,25 @@ import matplotlib.pyplot as plt
 symbol = "LC"
 data_path = f"../data/{symbol}.csv"
 
-threshold_window = 30
+threshold_window = 20
 threshold_quantile = 0.9
-threshold_multiplier = 3
-min_threshold = 0.04
-max_threshold = 0.10
+threshold_multiplier = 2
+min_threshold = 0.02
+max_threshold = 0.04
 initial_threshold = min_threshold
 
 min_trend_days = 5
+
+# 趋势结束点前3天、后2天，定义为趋势反转段
+reversal_pre_days = 3
+reversal_post_days = 2
 
 plot_figsize = (16, 7)
 plot_dpi = 300
 
 trend_figure_path = f"../results/figures/{symbol}_trend_segments.png"
-daily_output_path = f"../results/tables/{symbol}_daily_with_trend.csv"
-segments_output_path = f"../results/tables/{symbol}_trend_segments.csv"
+daily_output_path = f"../results/tables//daily/{symbol}_daily_with_trend.csv"
+segments_output_path = f"../results/tables//daily/{symbol}_trend_segments.csv"
 
 # =========================
 # 1. 读取分钟数据
@@ -289,6 +293,60 @@ def find_trend_segments(daily, min_days):
 
     return segments
 
+def add_reversal_window(daily, segments, pre_days=3, post_days=2):
+    """
+    给每一段趋势定义“趋势反转段”。
+
+    定义：
+    趋势真正结束点 end_index 前 pre_days 天，
+    到 end_index 后 post_days 天，
+    作为趋势反转段。
+
+    例如 pre_days=3, post_days=2：
+    趋势结束点前3天 + 趋势结束当天 + 趋势结束后2天
+    都属于趋势反转段。
+
+    注意：
+    这个标签主要用于事后评估因子是否有效，
+    不能在真实交易中提前知道。
+    """
+
+    # daily 里新增两列
+    daily["is_reversal_window"] = 0
+    daily["reversal_segment_id"] = np.nan
+
+    if segments.empty:
+        return daily, segments
+
+    # segments 里也新增反转段的起止位置
+    segments["reversal_start_index"] = np.nan
+    segments["reversal_end_index"] = np.nan
+    segments["reversal_start_date"] = pd.NaT
+    segments["reversal_end_date"] = pd.NaT
+
+    last_index = len(daily) - 1
+
+    for idx, row in segments.iterrows():
+
+        end_i = int(row["end_index"])
+
+        reversal_start_i = max(0, end_i - pre_days)
+        reversal_end_i = min(last_index, end_i + post_days)
+
+        segments.loc[idx, "reversal_start_index"] = reversal_start_i
+        segments.loc[idx, "reversal_end_index"] = reversal_end_i
+        segments.loc[idx, "reversal_start_date"] = daily.loc[reversal_start_i, "date"]
+        segments.loc[idx, "reversal_end_date"] = daily.loc[reversal_end_i, "date"]
+
+        mask = (
+            (daily.index >= reversal_start_i) &
+            (daily.index <= reversal_end_i)
+        )
+
+        daily.loc[mask, "is_reversal_window"] = 1
+        daily.loc[mask, "reversal_segment_id"] = row["segment_id"]
+
+    return daily, segments
 
 add_dynamic_threshold(
     daily,
@@ -308,6 +366,13 @@ print(
 segments = find_trend_segments(
     daily,
     min_days=min_trend_days
+)
+
+daily, segments = add_reversal_window(
+    daily,
+    segments,
+    pre_days=reversal_pre_days,
+    post_days=reversal_post_days
 )
 
 
