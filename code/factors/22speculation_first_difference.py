@@ -32,7 +32,7 @@ large_abs_diff_rank_threshold = 0.95  # 绝对一阶差分处于历史高位的�
 min_history_days = 10  # 计算历史分位数所需的最少历史天数
 
 # 单因子触发后，建议仓位比例
-signal_position_scale = 0.7
+signal_position_scale = 0.5
 
 price_figsize = (12, 6)
 diff_figsize = (12, 6)

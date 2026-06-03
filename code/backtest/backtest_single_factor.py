@@ -18,7 +18,7 @@ factor_name = os.environ.get("FACTOR_NAME", "high_speculation")
 # 12 speculation_mad
 # 21 speculation_change_rate
 # 22 speculation_first_difference
-# 23  speculation_continuous_drop
+# 23 speculation_continuous_drop
 
 annual_days = 252
 
@@ -75,6 +75,14 @@ summary_output_path = os.path.join(
     f"{symbol}_{factor_id}_{factor_name}_backtest_summary.csv"
 )
 
+nav_figure_path = os.path.join(
+    project_root,
+    "results",
+    "figures",
+    "backtest",
+    f"{symbol}_{factor_id}_{factor_name}_nav_curve.png"
+)
+
 
 # =========================
 # 1. 读取数据
@@ -93,6 +101,8 @@ if "end_signal_date" in segments.columns:
 daily = daily.sort_values("date").reset_index(drop=True)
 
 realtime_columns = [
+    "open",
+    "close",
     "realtime_trend",
     "realtime_position",
     "realtime_segment_id",
@@ -122,8 +132,10 @@ if missing_realtime_columns and os.path.exists(prepared_daily_input_path):
 # =========================
 # 2. 生成原始趋势仓位
 # =========================
+# realtime_position 是当天收盘后根据当天 close 确认的状态，
+# 因此只能在下一交易日使用，避免用收盘后信息赚当天 open-close 收益。
 
-daily["base_position"] = daily["realtime_position"]
+daily["base_position"] = daily["realtime_position"].shift(1).fillna(0)
 
 # =========================
 # 3. 生成单因子减仓仓位
@@ -134,7 +146,7 @@ if "position_scale" not in daily.columns:
     daily["position_scale"] = 1.0
 
 daily["factor_position"] = (
-    daily["base_position"] * daily["position_scale"]
+    daily["base_position"] * daily["position_scale"].shift(1).fillna(1.0)
 )
 
 
@@ -142,25 +154,32 @@ daily["factor_position"] = (
 # 4. 计算每日收益和净值
 # =========================
 
-daily["daily_return"] = daily["close"].pct_change()
+# 每日价格变化：
+# 默认用 平仓价 - 开仓价，也就是 close - open
+# 如果当天做多，价格上涨赚钱；
+# 如果当天做空，position 为 -1，价格下跌赚钱。
+daily["daily_price_return"] = daily["close"] - daily["open"]
 
-# 用昨天的仓位赚今天的收益，避免未来函数
+# 因子策略每日收益 = 当天价格变化 * 因子仓位
 daily["strategy_return"] = (
-    daily["factor_position"].shift(1) * daily["daily_return"]
+    daily["factor_position"] * daily["daily_price_return"]
 )
 
+# 原始趋势策略每日收益 = 当天价格变化 * 原始趋势仓位
 daily["base_strategy_return"] = (
-    daily["base_position"].shift(1) * daily["daily_return"]
+    daily["base_position"] * daily["daily_price_return"]
 )
 
 daily["strategy_return"] = daily["strategy_return"].fillna(0)
 daily["base_strategy_return"] = daily["base_strategy_return"].fillna(0)
 
-daily["nav"] = (1 + daily["strategy_return"]).cumprod()
-daily["base_nav"] = (1 + daily["base_strategy_return"]).cumprod()
+# 净值曲线改为相加，不再使用连乘
+daily["nav"] = daily["strategy_return"].cumsum()
+daily["base_nav"] = daily["base_strategy_return"].cumsum()
 
+# 回撤也改成绝对回撤：历史最高累计收益 - 当前累计收益
 daily["running_max"] = daily["nav"].cummax()
-daily["drawdown"] = 1 - daily["nav"] / daily["running_max"]
+daily["drawdown"] = daily["running_max"] - daily["nav"]
 
 
 # =========================
@@ -169,7 +188,11 @@ daily["drawdown"] = 1 - daily["nav"] / daily["running_max"]
 
 num_days = len(daily)
 
-annual_return = daily["nav"].iloc[-1] ** (annual_days / num_days) - 1
+# 现在收益是价格差收益，不是百分比复利收益
+# 年化收益 = 平均每日收益 * 252
+annual_return = (
+    daily["strategy_return"].mean() * annual_days
+)
 
 max_drawdown = daily["drawdown"].max()
 
@@ -212,10 +235,10 @@ for _, seg in segments.iterrows():
         end_signal_close = end_close
 
     # 单因子策略在这一段的收益
-    trade_return = (1 + part["strategy_return"]).prod() - 1
+    trade_return = part["strategy_return"].sum()
 
     # 原始趋势策略在这一段的收益
-    base_trade_return = (1 + part["base_strategy_return"]).prod() - 1
+    base_trade_return = part["base_strategy_return"].sum()
 
     # 是否触发过信号
     has_signal = int(part["signal"].sum() > 0)
@@ -335,6 +358,7 @@ summary = pd.DataFrame([{
 os.makedirs(os.path.dirname(backtest_daily_output_path), exist_ok=True)
 os.makedirs(os.path.dirname(backtest_trades_output_path), exist_ok=True)
 os.makedirs(os.path.dirname(summary_output_path), exist_ok=True)
+os.makedirs(os.path.dirname(nav_figure_path), exist_ok=True)
 
 daily.to_csv(backtest_daily_output_path, index=False)
 trade_table.to_csv(backtest_trades_output_path, index=False)
@@ -349,14 +373,53 @@ print("\n绩效汇总：")
 print(summary)
 
 base_annual_return = (
-    daily["base_nav"].iloc[-1] ** (annual_days / num_days) - 1
+    daily["base_strategy_return"].mean() * annual_days
 )
 
-print("因子策略最终净值:", daily["nav"].iloc[-1])
-print("原始趋势策略最终净值:", daily["base_nav"].iloc[-1])
+print("因子策略最终累计收益:", daily["nav"].iloc[-1])
+print("原始趋势策略最终累计收益:", daily["base_nav"].iloc[-1])
 
 print("因子策略年化收益:", annual_return)
 print("原始趋势策略年化收益:", base_annual_return)
 
-print("因子策略总收益:", daily["nav"].iloc[-1] - 1)
-print("原始趋势策略总收益:", daily["base_nav"].iloc[-1] - 1)
+print("因子策略总收益:", daily["nav"].iloc[-1])
+print("原始趋势策略总收益:", daily["base_nav"].iloc[-1])
+
+print(f"净值走势图保存为：{nav_figure_path}")
+
+# =========================
+# 9. 画净值走势图
+# =========================
+
+plt.figure(figsize=(14, 6))
+
+plt.plot(
+    daily["date"],
+    daily["nav"],
+    label="Factor Strategy NAV"
+)
+
+plt.plot(
+    daily["date"],
+    daily["base_nav"],
+    label="Base Trend Strategy NAV"
+)
+
+plt.axhline(
+    y=0,
+    linestyle="--",
+    linewidth=1
+)
+
+plt.title(
+    f"{symbol} {factor_id} {factor_name} Backtest NAV Curve"
+)
+
+plt.xlabel("Date")
+plt.ylabel("Cumulative PnL")
+plt.legend()
+plt.grid(alpha=0.3)
+plt.tight_layout()
+
+plt.savefig(nav_figure_path, dpi=300)
+plt.close()

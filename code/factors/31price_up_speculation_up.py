@@ -1,18 +1,6 @@
 import os
-
-# 当前文件在 code/factors/ 下面
-# project_root 指向项目根目录 LcResearch/
-project_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-)
-
-os.environ.setdefault("MPLCONFIGDIR", os.path.join(project_root, ".matplotlib"))
-
 import pandas as pd
 import numpy as np
-import matplotlib
-
-matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 # =========================
@@ -21,27 +9,43 @@ import matplotlib.pyplot as plt
 
 symbol = "LC"
 
-factor_id = "21"
-factor_name = "speculation_change_rate"
+factor_id = "31"
+factor_name = "price_up_speculation_up"
 
-change_days = 1  # 和多少个交易日前相比，计算投机度变化率
-history_window = 20  # 用过去多少个交易日判断变化率是否异常
-high_change_rank_threshold = 0.98  # 变化率处于历史高位的分位数阈值
-low_change_rank_threshold = 0.02  # 变化率处于历史低位的分位数阈值
-min_history_days = 10  # 计算历史分位数所需的最少历史天数
+# 过去多少天判断“价格大部分时间上涨”
+price_window = 10
 
-# 单因子触发后，建议仓位比例
-signal_position_scale = 0.5
+# 过去多少天作为投机度历史参照
+spec_window = 10
+
+# 过去 price_window 天中，至少多少比例是上涨日
+price_up_ratio_threshold = 0.7
+
+# 投机度突然升高的阈值
+# MAD score >= 1 表示今天投机度明显高于过去一段时间
+spec_mad_threshold = 1
+
+# MAD 缩放系数，把 MAD 调整到类似标准差的尺度
+mad_scale = 1.4826
+
+# 避免 MAD 为 0
+mad_epsilon = 1e-12
+
+# 最小历史天数
+min_history_days = 5
+
+# 触发信号后，建议仓位比例
+signal_position_scale = 0.7
 
 price_figsize = (12, 6)
-change_figsize = (12, 5)
+factor_figsize = (12, 5)
 signal_point_size = 20
 plot_dpi = 300
+
 
 # =========================
 # 输入路径
 # =========================
-# 当前文件在 code/factors/ 下面运行，所以要用 ../../ 回到项目根目录
 
 daily_input_path = f"../../results/tables/daily/{symbol}_daily_with_trend.csv"
 segments_input_path = f"../../results/tables/daily/{symbol}_trend_segments.csv"
@@ -74,12 +78,12 @@ price_figure_path = (
     f"../../results/figures/{symbol}_{factor_id}_{factor_name}_signal_on_price.png"
 )
 
-change_figure_path = (
-    f"../../results/figures/{symbol}_{factor_id}_{factor_name}.png"
+factor_figure_path = (
+    f"../../results/figures/{symbol}_{factor_id}_{factor_name}_factor_value.png"
 )
 
-price_change_figure_path = (
-    f"../../results/figures/{symbol}_{factor_id}_{factor_name}_price_and_factor.png"
+price_speculation_figure_path = (
+    f"../../results/figures/{symbol}_{factor_id}_{factor_name}_price_and_speculation.png"
 )
 
 
@@ -109,10 +113,8 @@ if "reversal_end_date" in segments.columns:
 
 
 # =========================
-# 2. 检查是否已经有趋势反转段标签
+# 2. 检查是否有趋势反转段标签
 # =========================
-# is_reversal_window = 1 表示：
-# 当前日期处于趋势结束点前3天到后2天的趋势反转段内
 
 if "is_reversal_window" not in daily.columns:
     daily["is_reversal_window"] = 0
@@ -122,120 +124,138 @@ if "reversal_segment_id" not in daily.columns:
 
 
 # =========================
-# 3. 计算投机度变化率
+# 3. 计算价格上涨比例
 # =========================
-# speculation = log(volume / open_interest)
-# 所以 speculation 的差值，可以还原成 volume / open_interest 的变化率。
+# return > 0 表示当天价格上涨
+# price_up_ratio 表示过去 price_window 天中，上涨天数占比
+#
+# 注意：
+# 这里 price_up_ratio 包含今天的涨跌情况。
+# 如果你之后真实交易，为了避免用当天收盘后信号交易当天，
+# 回测时应该用 signal.shift(1) 后的仓位赚下一天收益。
 
-daily["speculation_change"] = (
-    daily["speculation"] - daily["speculation"].shift(change_days)
+daily["daily_return"] = daily["close"].pct_change()
+daily["is_up_day"] = (daily["daily_return"] > 0).astype(int)
+
+daily["price_up_ratio"] = (
+    daily["is_up_day"]
+    .rolling(window=price_window, min_periods=min_history_days)
+    .mean()
 )
 
-daily["speculation_change_rate"] = (
-    np.exp(daily["speculation_change"]) - 1
+
+# =========================
+# 4. 计算投机度突然升高：MAD 方法
+# =========================
+# 用今天投机度和过去 spec_window 天投机度比较。
+#
+# speculation_median_past:
+#   过去 spec_window 天投机度中位数，不包含今天
+#
+# speculation_mad_past:
+#   过去 spec_window 天投机度的 MAD，不包含今天
+#
+# speculation_mad_score:
+#   今天投机度相对过去一段时间的 MAD 标准化偏离
+#
+# 好处：
+# MAD 比均值和标准差更稳健，不容易被极端值影响。
+
+daily["speculation_median_past"] = (
+    daily["speculation"]
+    .rolling(window=spec_window, min_periods=min_history_days)
+    .median()
+    .shift(1)
 )
 
-
-# =========================
-# 4. 判断变化率是否处于历史高位或低位
-# =========================
-# 分位数只使用“今天以前”的数据，避免未来数据泄露。
-
-daily["speculation_change_rate_rank"] = np.nan
-daily["speculation_fast_rise_signal"] = 0
-daily["speculation_fast_drop_signal"] = 0
+daily["speculation_mad_past"] = np.nan
 
 for i in range(len(daily)):
 
-    current_change_rate = daily.iloc[i]["speculation_change_rate"]
+    start_i = max(0, i - spec_window)
 
-    if pd.isna(current_change_rate):
-        continue
-
-    start_i = max(0, i - history_window)
-
-    # 只使用今天以前的数据
-    history = daily.iloc[start_i:i]["speculation_change_rate"].dropna()
+    history = daily.iloc[start_i:i]["speculation"].dropna()
 
     if len(history) < min_history_days:
         continue
 
-    rank = (history <= current_change_rate).mean()
+    median_value = history.median()
 
-    daily.loc[daily.index[i], "speculation_change_rate_rank"] = rank
+    mad_value = (history - median_value).abs().median()
 
+    daily.loc[daily.index[i], "speculation_mad_past"] = mad_value
+
+
+daily["speculation_mad_score"] = (
+    (daily["speculation"] - daily["speculation_median_past"]) /
+    (mad_scale * daily["speculation_mad_past"] + mad_epsilon)
+)
+
+# 如果 MAD 为 0，说明过去这段时间投机度几乎没有波动，
+# 此时 MAD score 不稳定，设为 NaN
+daily.loc[
+    daily["speculation_mad_past"] <= 0,
+    "speculation_mad_score"
+] = np.nan
+
+
+# =========================
+# 5. 生成因子信号
+# =========================
+# 这个因子主要用于上涨趋势：
+# 价格过去一段时间大部分在涨，同时投机度突然升高。
+#
+# 直觉：
+# 趋势已经涨了一段，投机度突然升高，可能代表跟风资金集中进入，
+# 行情可能进入过热阶段。
+
+daily["price_up_speculation_up_signal"] = 0
+
+# daily.loc[
+#     (
+#         daily["trend"] == "up_trend"
+#     ) & (
+#         daily["price_up_ratio"] >= price_up_ratio_threshold
+#     ) & (
+#         daily["speculation_mad_score"] >= spec_mad_threshold
+#     ),
+#     "price_up_speculation_up_signal"
+# ] = 1
 
 daily.loc[
-    daily["speculation_change_rate_rank"] >= high_change_rank_threshold,
-    "speculation_fast_rise_signal"
-] = 1
-
-daily.loc[
-    daily["speculation_change_rate_rank"] <= low_change_rank_threshold,
-    "speculation_fast_drop_signal"
+    (
+        daily["price_up_ratio"] >= price_up_ratio_threshold
+    ) & (
+        daily["speculation_mad_score"] >= spec_mad_threshold
+    ),
+    "price_up_speculation_up_signal"
 ] = 1
 
 
 # =========================
-# 5. 生成标准化因子每日表
+# 6. 生成标准化因子每日表
 # =========================
-# 这个表是之后单因子回测、多因子回测的统一输入格式。
 
 daily["factor_id"] = factor_id
 daily["factor_name"] = factor_name
 
-# 主因子值：投机度变化率
-daily["factor_value"] = daily["speculation_change_rate"]
+# 主因子值：
+# 这里用 speculation_mad_score 作为 factor_value
+# 因为这个因子真正衡量的是“投机度突然变大”的程度
+daily["factor_value"] = daily["speculation_mad_score"]
 
-# 统一信号列：
-# 投机度变化率极端上升或极端下降，都认为是一个变化率异常信号
-daily["signal"] = (
-    (daily["speculation_fast_rise_signal"] == 1) |
-    (daily["speculation_fast_drop_signal"] == 1)
-).astype(int)
+daily["signal"] = daily["price_up_speculation_up_signal"]
 
-# 信号方向：
-# fast_rise 表示投机度快速上升；
-# fast_drop 表示投机度快速下降；
-# none 表示没有信号。
-daily["signal_type"] = "none"
-
-daily.loc[
-    daily["speculation_fast_rise_signal"] == 1,
-    "signal_type"
-] = "fast_rise"
-
-daily.loc[
-    daily["speculation_fast_drop_signal"] == 1,
-    "signal_type"
-] = "fast_drop"
-
-# 理论上同一天不太会同时处于 0.98 和 0.02 分位数；
-# 这里保留一个兜底。
-daily.loc[
-    (
-        daily["speculation_fast_rise_signal"] == 1
-    ) & (
-        daily["speculation_fast_drop_signal"] == 1
-    ),
-    "signal_type"
-] = "both"
-
-# 触发信号后建议仓位比例
 daily["position_scale"] = 1.0
 daily.loc[daily["signal"] == 1, "position_scale"] = signal_position_scale
 
 # 是否为有效信号：
-# 只有在趋势反转段内触发的信号，才算有效
+# 只有在趋势反转段内触发信号，才算有效
 daily["is_effective_signal"] = (
     (daily["signal"] == 1) &
     (daily["is_reversal_window"] == 1)
 ).astype(int)
 
-
-# =========================
-# 6. 输出标准化因子每日值表
-# =========================
 
 factor_daily = daily[
     [
@@ -250,14 +270,14 @@ factor_daily = daily[
         "factor_name",
         "factor_value",
 
-        "speculation",
-        "speculation_change",
-        "speculation_change_rate",
-        "speculation_change_rate_rank",
+        "daily_return",
+        "is_up_day",
+        "price_up_ratio",
 
-        "speculation_fast_rise_signal",
-        "speculation_fast_drop_signal",
-        "signal_type",
+        "speculation",
+        "speculation_median_past",
+        "speculation_mad_past",
+        "speculation_mad_score",
 
         "signal",
         "position_scale",
@@ -267,12 +287,13 @@ factor_daily = daily[
 
 
 # =========================
-# 7. 输出标准化信号事件表
+# 7. 生成标准化信号事件表
 # =========================
-# 这个表只保留 signal == 1 的日期。
-# 用来检查信号是否落在趋势反转段内。
 
 signal_points = daily[daily["signal"] == 1].copy()
+
+print("检测到的信号日期：")
+print(signal_points["date"].dt.strftime("%Y-%m-%d").to_list())
 
 signal_rows = []
 
@@ -303,20 +324,9 @@ for _, row in signal_points.iterrows():
         "signal_close": row["close"],
 
         "factor_value": row["factor_value"],
+        "price_up_ratio": row["price_up_ratio"],
         "speculation": row["speculation"],
-        "speculation_change": row["speculation_change"],
-        "speculation_change_rate": row["speculation_change_rate"],
-        "speculation_change_rate_rank": (
-            row["speculation_change_rate_rank"]
-        ),
-
-        "speculation_fast_rise_signal": (
-            row["speculation_fast_rise_signal"]
-        ),
-        "speculation_fast_drop_signal": (
-            row["speculation_fast_drop_signal"]
-        ),
-        "signal_type": row["signal_type"],
+        "speculation_mad_score": row["speculation_mad_score"],
 
         "position_scale": row["position_scale"],
 
@@ -341,10 +351,6 @@ signal_table = pd.DataFrame(signal_rows)
 # =========================
 # 8. 按趋势段汇总
 # =========================
-# 这个表用来评价：
-# 1. 每段趋势中有没有触发投机度变化率异常信号；
-# 2. 有没有在趋势反转段内触发；
-# 3. 有效信号出现了多少次。
 
 trend_daily = daily[daily["trend"] != "no_trend"].copy()
 
@@ -359,12 +365,12 @@ for _, seg in segments.iterrows():
     if len(part) == 0:
         continue
 
-    # 当前趋势段对应的趋势反转段
     reversal_part = daily[
         daily["reversal_segment_id"] == segment_id
     ].copy()
 
     signal_part = part[part["signal"] == 1].copy()
+
     effective_signal_part = reversal_part[
         reversal_part["is_effective_signal"] == 1
     ].copy()
@@ -412,65 +418,13 @@ for _, seg in segments.iterrows():
         "days": seg["days"],
         "return": seg["return"],
 
-        # 整个趋势段内的变化率统计
-        "mean_change_rate_in_trend": (
-            part["speculation_change_rate"].mean()
-        ),
-        "max_change_rate_in_trend": (
-            part["speculation_change_rate"].max()
-        ),
-        "min_change_rate_in_trend": (
-            part["speculation_change_rate"].min()
-        ),
-
-        # 整个趋势段内的信号
+        # 整个趋势段内的信号情况
         "signal_days_in_trend": part["signal"].sum(),
         "signal_ratio_in_trend": part["signal"].mean(),
 
-        "fast_rise_days_in_trend": (
-            part["speculation_fast_rise_signal"].sum()
-        ),
-        "fast_rise_ratio_in_trend": (
-            part["speculation_fast_rise_signal"].mean()
-        ),
-        "fast_drop_days_in_trend": (
-            part["speculation_fast_drop_signal"].sum()
-        ),
-        "fast_drop_ratio_in_trend": (
-            part["speculation_fast_drop_signal"].mean()
-        ),
-
-        # 趋势反转段内的变化率统计
-        "mean_change_rate_in_reversal_window": (
-            reversal_part["speculation_change_rate"].mean()
-        ),
-        "max_change_rate_in_reversal_window": (
-            reversal_part["speculation_change_rate"].max()
-        ),
-        "min_change_rate_in_reversal_window": (
-            reversal_part["speculation_change_rate"].min()
-        ),
-
-        # 趋势反转段内的信号
-        "signal_days_in_reversal_window": (
-            reversal_part["signal"].sum()
-        ),
-        "signal_ratio_in_reversal_window": (
-            reversal_part["signal"].mean()
-        ),
-
-        "fast_rise_days_in_reversal_window": (
-            reversal_part["speculation_fast_rise_signal"].sum()
-        ),
-        "fast_rise_ratio_in_reversal_window": (
-            reversal_part["speculation_fast_rise_signal"].mean()
-        ),
-        "fast_drop_days_in_reversal_window": (
-            reversal_part["speculation_fast_drop_signal"].sum()
-        ),
-        "fast_drop_ratio_in_reversal_window": (
-            reversal_part["speculation_fast_drop_signal"].mean()
-        ),
+        # 趋势反转段内的信号情况
+        "signal_days_in_reversal_window": reversal_part["signal"].sum(),
+        "signal_ratio_in_reversal_window": reversal_part["signal"].mean(),
 
         # 是否有信号
         "has_signal": int(part["signal"].sum() > 0),
@@ -492,7 +446,7 @@ for _, seg in segments.iterrows():
             days_to_end_first_effective_signal
         ),
 
-        # 反转段内最高/平均因子值
+        # 反转段内因子表现
         "max_factor_value_in_reversal_window": (
             reversal_part["factor_value"].max()
         ),
@@ -500,16 +454,21 @@ for _, seg in segments.iterrows():
             reversal_part["factor_value"].mean()
         ),
 
-        # 反转段内最高/平均变化率分位数
-        "max_rank_in_reversal_window": (
-            reversal_part["speculation_change_rate_rank"].max()
+        "max_price_up_ratio_in_reversal_window": (
+            reversal_part["price_up_ratio"].max()
         ),
-        "mean_rank_in_reversal_window": (
-            reversal_part["speculation_change_rate_rank"].mean()
+        "mean_price_up_ratio_in_reversal_window": (
+            reversal_part["price_up_ratio"].mean()
+        ),
+        "max_speculation_mad_score_in_reversal_window": (
+            reversal_part["speculation_mad_score"].max()
+        ),
+        "mean_speculation_mad_score_in_reversal_window": (
+            reversal_part["speculation_mad_score"].mean()
         ),
     })
 
-change_rate_summary = pd.DataFrame(result_rows)
+factor_summary = pd.DataFrame(result_rows)
 
 
 # =========================
@@ -522,41 +481,30 @@ os.makedirs(os.path.dirname(summary_output_path), exist_ok=True)
 
 factor_daily.to_csv(factor_output_path, index=False)
 signal_table.to_csv(signal_output_path, index=False)
-change_rate_summary.to_csv(summary_output_path, index=False)
+factor_summary.to_csv(summary_output_path, index=False)
 
-print("因子 21：投机度变化率分析完成。")
+print(f"因子 {factor_id}：价格上涨 + 投机度突然升高分析完成。")
 print(f"因子每日值表保存为：{factor_output_path}")
 print(f"因子信号事件表保存为：{signal_output_path}")
 print(f"趋势段汇总表保存为：{summary_output_path}")
 
-print("\n趋势段汇总预览：")
-print(change_rate_summary.head(20))
-
 
 # =========================
-# 10. 画图：价格和变化率信号
+# 10. 画图：价格、信号、有效信号
 # =========================
 
 plt.figure(figsize=price_figsize)
 
 plt.plot(daily["date"], daily["close"], label="close")
 
-fast_rise_points = daily[daily["speculation_fast_rise_signal"] == 1]
-fast_drop_points = daily[daily["speculation_fast_drop_signal"] == 1]
+signal_points = daily[daily["signal"] == 1]
 effective_points = daily[daily["is_effective_signal"] == 1]
 
 plt.scatter(
-    fast_rise_points["date"],
-    fast_rise_points["close"],
+    signal_points["date"],
+    signal_points["close"],
     s=signal_point_size,
-    label="fast speculation rise"
-)
-
-plt.scatter(
-    fast_drop_points["date"],
-    fast_drop_points["close"],
-    s=signal_point_size,
-    label="fast speculation drop"
+    label="price up + speculation up signal"
 )
 
 plt.scatter(
@@ -567,7 +515,7 @@ plt.scatter(
     label="effective signal in reversal window"
 )
 
-plt.title(f"{symbol} Close Price and Factor 21 Signal")
+plt.title(f"{symbol} Close Price and Factor 31 Signal")
 plt.xlabel("Date")
 plt.ylabel("Close Price")
 plt.legend()
@@ -579,16 +527,8 @@ plt.close()
 
 
 # =========================
-# 11. 画图：价格和投机度变化率
+# 11. 画图：价格和投机度
 # =========================
-
-change_rate_for_plot = daily["speculation_change_rate"].copy()
-change_rate_low = change_rate_for_plot.quantile(0.01)
-change_rate_high = change_rate_for_plot.quantile(0.99)
-change_rate_for_plot = change_rate_for_plot.clip(
-    lower=change_rate_low,
-    upper=change_rate_high
-)
 
 fig, ax1 = plt.subplots(figsize=price_figsize)
 
@@ -600,48 +540,62 @@ ax1.tick_params(axis="y", labelcolor="tab:blue")
 ax2 = ax1.twinx()
 ax2.plot(
     daily["date"],
-    change_rate_for_plot,
-    label="speculation change rate clipped",
+    daily["speculation"],
+    label="speculation",
     color="tab:orange"
 )
-ax2.set_ylabel("Speculation Change Rate", color="tab:orange")
+ax2.set_ylabel("Speculation", color="tab:orange")
 ax2.tick_params(axis="y", labelcolor="tab:orange")
-ax2.axhline(0, color="gray", linewidth=1)
 
-plt.title(f"{symbol} Close Price and Factor 21 Speculation Change Rate")
-ax1.legend(loc="upper left")
-ax2.legend(loc="upper right")
+plt.title(f"{symbol} Close Price and Speculation")
 fig.tight_layout()
 
-plt.savefig(price_change_figure_path, dpi=plot_dpi)
+os.makedirs(os.path.dirname(price_speculation_figure_path), exist_ok=True)
+plt.savefig(price_speculation_figure_path, dpi=plot_dpi)
 plt.close()
 
 
 # =========================
-# 12. 画图：投机度变化率
+# 12. 画图：价格上涨比例和投机度 MAD score
 # =========================
 
-plt.figure(figsize=change_figsize)
+plt.figure(figsize=factor_figsize)
 
 plt.plot(
     daily["date"],
-    daily["speculation_change_rate"],
-    label="speculation change rate"
+    daily["price_up_ratio"],
+    label="price up ratio"
 )
 
-plt.axhline(0, color="gray", linewidth=1)
+plt.plot(
+    daily["date"],
+    daily["speculation_mad_score"],
+    label="speculation MAD score"
+)
 
-plt.title("Factor 21: Speculation Change Rate")
+plt.axhline(
+    price_up_ratio_threshold,
+    linestyle="--",
+    label="price up ratio threshold"
+)
+
+plt.axhline(
+    spec_mad_threshold,
+    linestyle=":",
+    label="speculation MAD threshold"
+)
+
+plt.title("Factor 31: Price Up Ratio and Speculation MAD Score")
 plt.xlabel("Date")
-plt.ylabel("Change Rate")
+plt.ylabel("Factor Value")
 plt.legend()
 plt.tight_layout()
 
-os.makedirs(os.path.dirname(change_figure_path), exist_ok=True)
-plt.savefig(change_figure_path, dpi=plot_dpi)
+os.makedirs(os.path.dirname(factor_figure_path), exist_ok=True)
+plt.savefig(factor_figure_path, dpi=plot_dpi)
 plt.close()
 
 print("\n图片保存为：")
 print(price_figure_path)
-print(change_figure_path)
-print(price_change_figure_path)
+print(price_speculation_figure_path)
+print(factor_figure_path)

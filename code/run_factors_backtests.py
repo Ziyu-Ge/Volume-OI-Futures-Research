@@ -20,6 +20,8 @@ FACTORS = [
     ("21", "speculation_change_rate", "21speculation_change_rate.py"),
     ("22", "speculation_first_difference", "22speculation_first_difference.py"),
     ("23", "speculation_continuous_drop", "23speculation_continuous_drop.py"),
+    ("31", "price_up_speculation_up", "31price_up_speculation_up.py"),
+    ("32", "price_down_speculation_up", "32price_down_speculation_up.py"),
 ]
 
 
