@@ -35,7 +35,7 @@ mad_epsilon = 1e-12
 min_history_days = 5
 
 # 触发信号后，建议仓位比例
-signal_position_scale = 0.7
+signal_position_scale = -1
 
 price_figsize = (12, 6)
 factor_figsize = (12, 5)
