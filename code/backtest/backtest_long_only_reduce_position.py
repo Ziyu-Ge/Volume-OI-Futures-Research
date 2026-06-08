@@ -1,6 +1,26 @@
 import os
+
+project_root = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
+
+os.environ.setdefault(
+    "MPLCONFIGDIR",
+    os.path.join(project_root, ".matplotlib")
+)
+os.environ.setdefault(
+    "XDG_CACHE_HOME",
+    os.path.join(project_root, ".cache")
+)
+
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
+os.makedirs(os.environ["XDG_CACHE_HOME"], exist_ok=True)
+
 import pandas as pd
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 
@@ -8,10 +28,22 @@ import matplotlib.pyplot as plt
 # 参数设置
 # =========================
 
-symbol = "LC"
+symbol = os.environ.get("SYMBOL", "LC")
 
-factor_id = "42"
-factor_name = "price_up_oi_down"
+factor_name_by_id = {
+    "42": "price_up_oi_down",
+    "43": "uptrend_crowded_chase",
+    "44": "uptrend_range_climax",
+    "45": "uptrend_push_failure",
+    "46": "uptrend_oi_unwind_divergence",
+    "47": "downtrend_crowded_exhaustion",
+}
+
+factor_id = os.environ.get("FACTOR_ID", "42")
+factor_name = os.environ.get(
+    "FACTOR_NAME",
+    factor_name_by_id.get(factor_id, "price_up_oi_down")
+)
 
 reduce_days = 3  # 一有信号，就从下一天开始连续平仓 3 天
 annual_days = 252

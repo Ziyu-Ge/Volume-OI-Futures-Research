@@ -13,8 +13,9 @@ factor_name = "uptrend_push_failure"
 price_rank_threshold = 0.75
 ret_3_threshold = 0.015
 close_location_threshold = 0.55
-volume_mad_threshold = 0.0
-signal_position_scale = 0.3
+volume_mad_threshold = 0.3
+price_efficiency_low_rank_threshold = 0.4
+signal_position_scale = -1
 
 
 daily, segments = load_daily_and_segments(symbol)
@@ -40,6 +41,10 @@ daily.loc[
         daily["oi_ret_3"] > 0
     ) & (
         daily["volume_mad_score"] >= volume_mad_threshold
+    ) & (
+        daily["price_efficiency_low_rank_20"] >= (
+            price_efficiency_low_rank_threshold
+        )
     ) & (
         (daily["ret_3"] <= ret_3_threshold) |
         (daily["close_location"] <= close_location_threshold)

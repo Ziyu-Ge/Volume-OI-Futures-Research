@@ -10,10 +10,11 @@ symbol = "LC"
 factor_id = "46"
 factor_name = "uptrend_oi_unwind_divergence"
 
-ret_10_threshold = 0.04
+ret_10_threshold = 0.08
+price_rank_threshold = 0.60
 volume_mad_threshold = 0.5
 speculation_mad_threshold = 0.5
-signal_position_scale = 0.2
+signal_position_scale = -1
 
 
 daily, segments = load_daily_and_segments(symbol)
@@ -30,6 +31,8 @@ daily["uptrend_oi_unwind_divergence_signal"] = 0
 daily.loc[
     (
         daily["realtime_trend"] == "up_trend"
+    ) & (
+        daily["close_rank_20"] >= price_rank_threshold
     ) & (
         daily["ret_10"] > ret_10_threshold
     ) & (

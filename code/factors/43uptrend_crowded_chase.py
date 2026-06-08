@@ -7,56 +7,59 @@ from volume_price_factor_utils import (
 
 
 symbol = "LC"
-factor_id = "44"
-factor_name = "uptrend_range_climax"
+factor_id = "43"
+factor_name = "uptrend_crowded_chase"
 
-price_rank_threshold = 0.70
-range_mad_threshold = 1.0
-volume_mad_threshold = 0.8
-close_location_threshold = 0.65
-signal_position_scale = 0.0
+price_rank_threshold = 0.75
+oi_ret_5_threshold = 0.05
+volume_mad_threshold = 1.2
+range_mad_threshold = 1.2
+close_location_threshold = 0.95
+signal_position_scale = -1
 
 
 daily, segments = load_daily_and_segments(symbol)
 daily = add_volume_price_features(daily)
 
-weak_close_score = 1 - daily["close_location"].clip(lower=0, upper=1)
-
-daily["range_climax_score"] = (
+daily["crowded_chase_score"] = (
     daily["close_rank_20"].fillna(0)
-    + positive_part(daily["range_mad_score"]) * weak_close_score.fillna(0)
-    + 0.5 * positive_part(daily["open_interest_mad_score"])
+    + positive_part(daily["open_interest_mad_score"])
     + 0.5 * positive_part(daily["volume_mad_score"])
+    + 0.5 * positive_part(daily["range_mad_score"])
 )
 
-daily["uptrend_range_climax_signal"] = 0
+daily["uptrend_crowded_chase_signal"] = 0
 daily.loc[
     (
         daily["realtime_trend"] == "up_trend"
     ) & (
         daily["close_rank_20"] >= price_rank_threshold
     ) & (
-        daily["range_mad_score"] >= range_mad_threshold
+        daily["ret_5"] > 0
     ) & (
-        (daily["oi_ret_3"] > 0) |
-        (daily["volume_mad_score"] >= volume_mad_threshold)
+        daily["oi_ret_5"] > oi_ret_5_threshold
+    ) & (
+        (daily["volume_mad_score"] >= volume_mad_threshold) |
+        (daily["range_mad_score"] >= range_mad_threshold)
     ) & (
         daily["close_location"] <= close_location_threshold
     ),
-    "uptrend_range_climax_signal",
+    "uptrend_crowded_chase_signal",
 ] = 1
 
 feature_columns = [
-    "ret_3",
+    "daily_return",
+    "ret_5",
     "realtime_trend_age",
     "close_rank_20",
     "close_rank_60",
-    "oi_ret_3",
+    "oi_ret_5",
+    "open_interest_mad_score",
     "volume_mad_score",
     "range_pct",
     "range_mad_score",
     "close_location",
-    "range_climax_score",
+    "crowded_chase_score",
 ]
 
 save_factor_outputs(
@@ -65,14 +68,16 @@ save_factor_outputs(
     symbol=symbol,
     factor_id=factor_id,
     factor_name=factor_name,
-    factor_value_column="range_climax_score",
-    signal_column="uptrend_range_climax_signal",
+    factor_value_column="crowded_chase_score",
+    signal_column="uptrend_crowded_chase_signal",
     position_scale_on_signal=signal_position_scale,
     feature_columns=feature_columns,
     figure_feature_columns=[
-        "range_mad_score",
-        "close_location",
+        "close_rank_20",
+        "close_rank_60",
+        "open_interest_mad_score",
         "volume_mad_score",
+        "range_mad_score",
     ],
     target_trend="up_trend",
 )
