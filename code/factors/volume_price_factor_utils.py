@@ -498,6 +498,7 @@ def save_factor_outputs(
     feature_columns,
     figure_feature_columns=None,
     target_trend=None,
+    signal_holding_days=1,
 ):
     daily = daily.copy()
     daily = add_reversal_trend_labels(daily, segments)
@@ -506,10 +507,22 @@ def save_factor_outputs(
     daily["factor_name"] = factor_name
     daily["factor_value"] = daily[factor_value_column]
     daily["signal"] = daily[signal_column].fillna(0).astype(int)
+
+    signal_holding_days = max(int(signal_holding_days), 1)
+    position_mask = daily["signal"] == 1
+    if signal_holding_days > 1:
+        position_mask = (
+            daily["signal"]
+            .rolling(window=signal_holding_days, min_periods=1)
+            .max()
+            .fillna(0)
+            .astype(int)
+            == 1
+        )
+
     daily["position_scale"] = 1.0
-    daily.loc[daily["signal"] == 1, "position_scale"] = (
-        position_scale_on_signal
-    )
+    daily.loc[position_mask, "position_scale"] = position_scale_on_signal
+
     effective_mask = (
         (daily["signal"] == 1) &
         (daily["is_reversal_window"] == 1)
