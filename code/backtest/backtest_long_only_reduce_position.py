@@ -37,6 +37,7 @@ factor_name_by_id = {
     "45": "uptrend_push_failure",
     "46": "uptrend_oi_unwind_divergence",
     "47": "downtrend_crowded_exhaustion",
+    "51": "price_volume_up_oi_down_short_5d",
 }
 
 factor_id = os.environ.get("FACTOR_ID", "42")
@@ -45,7 +46,16 @@ factor_name = os.environ.get(
     factor_name_by_id.get(factor_id, "price_up_oi_down")
 )
 
-reduce_days = 3  # 一有信号，就从下一天开始连续平仓 3 天
+reduce_days_by_factor_id = {
+    "51": 5,
+}
+
+reduce_days = int(
+    os.environ.get(
+        "REDUCE_DAYS",
+        reduce_days_by_factor_id.get(factor_id, 3)
+    )
+)
 annual_days = 252
 plot_dpi = 300
 figsize = (12, 6)
