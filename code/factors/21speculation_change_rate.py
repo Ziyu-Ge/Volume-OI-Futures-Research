@@ -26,8 +26,8 @@ factor_name = "speculation_change_rate"
 
 change_days = 1  # 和多少个交易日前相比，计算投机度变化率
 history_window = 20  # 用过去多少个交易日判断变化率是否异常
-high_change_rank_threshold = 0.98  # 变化率处于历史高位的分位数阈值
-low_change_rank_threshold = 0.02  # 变化率处于历史低位的分位数阈值
+high_change_rank_threshold = 0.99  # 变化率处于历史高位的分位数阈值
+low_change_rank_threshold = 0.01  # 变化率处于历史低位的分位数阈值
 min_history_days = 10  # 计算历史分位数所需的最少历史天数
 
 # 单因子触发后，建议仓位比例

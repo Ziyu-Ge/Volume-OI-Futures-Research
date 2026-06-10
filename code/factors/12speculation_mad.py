@@ -269,7 +269,7 @@ factor_daily = daily[
 # 6. 输出标准化信号事件表
 # =========================
 # 这个表只记录 signal == 1 的日期。
-# 如果信号落在趋势反转段内，则它对 reversal_segment_id 对应的趋势段有效。
+# 趋势段字段只作为补充信息：匹配不到趋势段时也保留信号事件。
 
 signal_points = daily[daily["signal"] == 1].copy()
 
@@ -284,19 +284,30 @@ for _, row in signal_points.iterrows():
     else:
         evaluation_segment_id = current_segment_id
 
+    signal_date = row["date"]
+
     matched_segment = segments[
         segments["segment_id"] == evaluation_segment_id
     ]
 
-    if len(matched_segment) == 0:
-        continue
+    if len(matched_segment) > 0:
+        seg = matched_segment.iloc[0]
 
-    seg = matched_segment.iloc[0]
-
-    signal_date = row["date"]
-    end_date = seg["end_date"]
-
-    days_to_trend_end = (end_date - signal_date).days
+        end_date = seg["end_date"]
+        end_close = seg["end_close"]
+        end_signal_date = seg.get("end_signal_date", pd.NaT)
+        end_signal_close = seg.get("end_signal_close", np.nan)
+        reversal_start_date = seg.get("reversal_start_date", pd.NaT)
+        reversal_end_date = seg.get("reversal_end_date", pd.NaT)
+        days_to_trend_end = (end_date - signal_date).days
+    else:
+        end_date = pd.NaT
+        end_close = np.nan
+        end_signal_date = pd.NaT
+        end_signal_close = np.nan
+        reversal_start_date = pd.NaT
+        reversal_end_date = pd.NaT
+        days_to_trend_end = ""
 
     signal_rows.append({
         "factor_id": factor_id,
@@ -324,14 +335,14 @@ for _, row in signal_points.iterrows():
         "is_reversal_window": row["is_reversal_window"],
         "is_effective_signal": row["is_effective_signal"],
 
-        "end_date": seg["end_date"],
-        "end_close": seg["end_close"],
+        "end_date": end_date,
+        "end_close": end_close,
 
-        "end_signal_date": seg.get("end_signal_date", pd.NaT),
-        "end_signal_close": seg.get("end_signal_close", np.nan),
+        "end_signal_date": end_signal_date,
+        "end_signal_close": end_signal_close,
 
-        "reversal_start_date": seg.get("reversal_start_date", pd.NaT),
-        "reversal_end_date": seg.get("reversal_end_date", pd.NaT),
+        "reversal_start_date": reversal_start_date,
+        "reversal_end_date": reversal_end_date,
 
         "days_to_trend_end": days_to_trend_end,
     })

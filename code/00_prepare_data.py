@@ -58,6 +58,8 @@ daily = df.groupby("date").agg({
 }).reset_index()
 
 daily["date"] = pd.to_datetime(daily["date"])
+excluded_dates = pd.to_datetime(["2023-12-08", "2025-08-11", "2026-01-12"])
+daily = daily[~daily["date"].isin(excluded_dates)].reset_index(drop=True)
 
 
 # =========================

@@ -10,7 +10,7 @@ symbol = "LC"
 factor_id = "43"
 factor_name = "uptrend_crowded_chase"
 
-price_rank_threshold = 0.75
+price_rank_threshold = 0.75 
 oi_ret_5_threshold = 0.05
 volume_mad_threshold = 1.2
 range_mad_threshold = 1.2
