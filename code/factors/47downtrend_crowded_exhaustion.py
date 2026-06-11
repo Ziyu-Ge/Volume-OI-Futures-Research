@@ -1,6 +1,6 @@
 from volume_price_factor_utils import (
     add_volume_price_features,
-    load_daily_and_segments,
+    load_daily,
     positive_part,
     save_factor_outputs,
 )
@@ -17,10 +17,10 @@ oi_ret_5_max_threshold = 0.09
 open_interest_mad_max_threshold = 2.0
 range_mad_threshold = 0.8
 close_location_threshold = 0.45
-signal_position_scale = -1
+signal_position_scale = 0
 
 
-daily, segments = load_daily_and_segments(symbol)
+daily = load_daily(symbol)
 daily = add_volume_price_features(daily)
 
 low_price_rank_score = 1 - daily["close_rank_20"]
@@ -39,8 +39,6 @@ daily["downtrend_exhaustion_score"] = (
 daily["downtrend_crowded_exhaustion_signal"] = 0
 daily.loc[
     (
-        daily["realtime_trend"] == "down_trend"
-    ) & (
         daily["close_rank_20"] <= close_rank_threshold
     ) & (
         daily["ret_5"] < ret_5_threshold
@@ -62,7 +60,6 @@ daily.loc[
 
 feature_columns = [
     "ret_5",
-    "realtime_trend_age",
     "close_rank_20",
     "close_rank_60",
     "oi_ret_5",
@@ -75,7 +72,6 @@ feature_columns = [
 
 save_factor_outputs(
     daily=daily,
-    segments=segments,
     symbol=symbol,
     factor_id=factor_id,
     factor_name=factor_name,
@@ -89,5 +85,4 @@ save_factor_outputs(
         "range_mad_score",
         "close_location",
     ],
-    target_trend="down_trend",
 )

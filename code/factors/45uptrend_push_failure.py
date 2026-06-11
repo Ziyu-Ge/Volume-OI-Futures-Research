@@ -1,6 +1,6 @@
 from volume_price_factor_utils import (
     add_volume_price_features,
-    load_daily_and_segments,
+    load_daily,
     positive_part,
     save_factor_outputs,
 )
@@ -15,10 +15,10 @@ ret_3_threshold = 0.015
 close_location_threshold = 0.55
 volume_mad_threshold = 0.3
 price_efficiency_low_rank_threshold = 0.4
-signal_position_scale = -1
+signal_position_scale = 0
 
 
-daily, segments = load_daily_and_segments(symbol)
+daily = load_daily(symbol)
 daily = add_volume_price_features(daily)
 
 weak_close_score = 1 - daily["close_location"].clip(lower=0, upper=1)
@@ -34,8 +34,6 @@ daily["push_failure_score"] = (
 daily["uptrend_push_failure_signal"] = 0
 daily.loc[
     (
-        daily["realtime_trend"] == "up_trend"
-    ) & (
         daily["close_rank_20"] >= price_rank_threshold
     ) & (
         daily["oi_ret_3"] > 0
@@ -55,7 +53,6 @@ daily.loc[
 feature_columns = [
     "ret_3",
     "ret_5",
-    "realtime_trend_age",
     "close_rank_20",
     "close_rank_60",
     "oi_ret_3",
@@ -69,7 +66,6 @@ feature_columns = [
 
 save_factor_outputs(
     daily=daily,
-    segments=segments,
     symbol=symbol,
     factor_id=factor_id,
     factor_name=factor_name,
@@ -82,5 +78,4 @@ save_factor_outputs(
         "close_location",
         "open_interest_mad_score",
     ],
-    target_trend="up_trend",
 )

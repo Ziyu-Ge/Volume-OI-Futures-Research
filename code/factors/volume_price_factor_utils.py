@@ -25,71 +25,25 @@ MAD_SCALE = 1.4826
 MAD_EPSILON = 1e-12
 
 
-def load_daily_and_segments(symbol):
+def load_daily(symbol):
     tables_dir = os.path.join(project_root, "results", "tables")
 
     daily_input_path = os.path.join(
         tables_dir,
         "daily",
-        f"{symbol}_daily_with_trend.csv"
-    )
-    segments_input_path = os.path.join(
-        tables_dir,
-        "daily",
-        f"{symbol}_trend_segments.csv"
+        f"{symbol}_daily.csv"
     )
 
     if not os.path.exists(daily_input_path):
         daily_input_path = os.path.join(
             tables_dir,
-            f"{symbol}_daily_with_trend.csv"
-        )
-
-    if not os.path.exists(segments_input_path):
-        segments_input_path = os.path.join(
-            tables_dir,
-            f"{symbol}_trend_segments.csv"
+            f"{symbol}_daily.csv"
         )
 
     daily = pd.read_csv(daily_input_path)
-    segments = pd.read_csv(segments_input_path)
 
     daily["date"] = pd.to_datetime(daily["date"])
     daily = daily.sort_values("date").reset_index(drop=True)
-
-    date_columns = [
-        "start_date",
-        "end_date",
-        "end_signal_date",
-        "reversal_start_date",
-        "reversal_end_date",
-    ]
-
-    for col in date_columns:
-        if col in segments.columns:
-            segments[col] = pd.to_datetime(segments[col])
-
-    if "is_reversal_window" not in daily.columns:
-        daily["is_reversal_window"] = 0
-
-    if "reversal_segment_id" not in daily.columns:
-        daily["reversal_segment_id"] = np.nan
-
-    return daily, segments
-
-
-def add_reversal_trend_labels(daily, segments):
-    trend_map = segments.set_index("segment_id")["trend"].to_dict()
-
-    daily["reversal_trend"] = daily["reversal_segment_id"].map(trend_map)
-    daily["is_uptrend_reversal_window"] = (
-        (daily["is_reversal_window"] == 1) &
-        (daily["reversal_trend"] == "up_trend")
-    ).astype(int)
-    daily["is_downtrend_reversal_window"] = (
-        (daily["is_reversal_window"] == 1) &
-        (daily["reversal_trend"] == "down_trend")
-    ).astype(int)
 
     return daily
 
@@ -109,7 +63,13 @@ def past_rank(series, window, min_history_days):
     return pd.Series(ranks, index=series.index)
 
 
-def mad_score(series, window, min_history_days):
+def mad_score(
+    series,
+    window,
+    min_history_days,
+    mad_scale=MAD_SCALE,
+    mad_epsilon=MAD_EPSILON,
+):
     median_past = (
         series
         .rolling(window=window, min_periods=min_history_days)
@@ -133,11 +93,53 @@ def mad_score(series, window, min_history_days):
     mad_past = pd.Series(mad_values, index=series.index)
     score = (
         (series - median_past) /
-        (MAD_SCALE * mad_past + MAD_EPSILON)
+        (mad_scale * mad_past + mad_epsilon)
     )
     score[mad_past <= 0] = np.nan
 
     return median_past, mad_past, score
+
+
+def past_mad_score(
+    series,
+    window,
+    min_history_days,
+    mad_scale=MAD_SCALE,
+    mad_epsilon=MAD_EPSILON,
+):
+    median_values = []
+    mad_values = []
+    score_values = []
+
+    for i, current_value in enumerate(series):
+        history = series.iloc[max(0, i - window):i].dropna()
+
+        if len(history) < min_history_days or pd.isna(current_value):
+            median_values.append(np.nan)
+            mad_values.append(np.nan)
+            score_values.append(np.nan)
+            continue
+
+        history_median = history.median()
+        history_mad = (history - history_median).abs().median()
+
+        if abs(history_mad) <= mad_epsilon:
+            median_values.append(np.nan)
+            mad_values.append(np.nan)
+            score_values.append(np.nan)
+            continue
+
+        median_values.append(history_median)
+        mad_values.append(history_mad)
+        score_values.append(
+            (current_value - history_median) / (mad_scale * history_mad)
+        )
+
+    return (
+        pd.Series(median_values, index=series.index),
+        pd.Series(mad_values, index=series.index),
+        pd.Series(score_values, index=series.index),
+    )
 
 
 def positive_part(series):
@@ -152,21 +154,6 @@ def add_volume_price_features(
     min_mad_days=5,
 ):
     daily = daily.copy()
-    trend_group = (
-        daily["realtime_trend"].fillna("no_trend") !=
-        daily["realtime_trend"].fillna("no_trend").shift(1)
-    ).cumsum()
-    daily["realtime_trend_age"] = (
-        daily
-        .groupby(trend_group)
-        .cumcount()
-        .add(1)
-    )
-    daily.loc[
-        daily["realtime_trend"].fillna("no_trend") == "no_trend",
-        "realtime_trend_age"
-    ] = 0
-
     daily["daily_return"] = daily["close"].pct_change()
 
     for window in [1, 3, 5, 10]:
@@ -269,228 +256,77 @@ def add_volume_price_features(
     return daily
 
 
-def build_signal_table(daily, segments, factor_id, factor_name):
-    signal_columns = [
+def build_signal_table(daily, factor_id, factor_name, feature_columns):
+    base_columns = [
         "factor_id",
         "factor_name",
-        "segment_id",
-        "trend",
-        "reversal_segment_id",
-        "reversal_trend",
-        "realtime_trend",
-        "matched_segment_id",
-        "matched_segment_trend",
-        "matched_segment_source",
         "signal_date",
         "signal_close",
         "factor_value",
         "position",
         "position_scale",
-        "is_reversal_window",
-        "is_effective_signal",
-        "end_date",
-        "end_close",
-        "end_signal_date",
-        "end_signal_close",
-        "reversal_start_date",
-        "reversal_end_date",
-        "days_to_trend_end",
     ]
+    output_columns = base_columns.copy()
 
-    signal_rows = []
+    for col in feature_columns:
+        if col in daily.columns and col not in output_columns:
+            output_columns.append(col)
+
+    signal_points = daily[daily["signal"] == 1].copy()
+    if len(signal_points) == 0:
+        return pd.DataFrame(columns=output_columns)
+
+    signal_table = signal_points.rename(
+        columns={
+            "date": "signal_date",
+            "close": "signal_close",
+        }
+    )
+
+    return signal_table[output_columns].copy()
+
+
+def build_summary_table(daily, factor_id, factor_name, feature_columns):
     signal_points = daily[daily["signal"] == 1].copy()
 
-    for _, row in signal_points.iterrows():
-        segment_id = row.get("segment_id", np.nan)
-        reversal_segment_id = row.get("reversal_segment_id", np.nan)
-        matched_segment = pd.DataFrame()
-        matched_segment_source = ""
-
-        if (
-            row.get("is_reversal_window", 0) == 1 and
-            pd.notna(reversal_segment_id)
-        ):
-            matched_segment = segments[
-                segments["segment_id"] == reversal_segment_id
-            ]
-            matched_segment_source = "reversal_segment_id"
-
-        if len(matched_segment) == 0 and pd.notna(segment_id):
-            matched_segment = segments[
-                segments["segment_id"] == segment_id
-            ]
-            matched_segment_source = "segment_id"
-
-        if len(matched_segment) > 0:
-            seg = matched_segment.iloc[0]
-            matched_segment_id = seg["segment_id"]
-            matched_segment_trend = seg["trend"]
-            end_date = seg["end_date"]
-            days_to_trend_end = (end_date - row["date"]).days
-            end_close = seg["end_close"]
-            end_signal_date = seg.get("end_signal_date", pd.NaT)
-            end_signal_close = seg.get("end_signal_close", np.nan)
-            reversal_start_date = seg.get("reversal_start_date", pd.NaT)
-            reversal_end_date = seg.get("reversal_end_date", pd.NaT)
-        else:
-            matched_segment_id = np.nan
-            matched_segment_trend = np.nan
-            end_date = pd.NaT
-            days_to_trend_end = np.nan
-            end_close = np.nan
-            end_signal_date = pd.NaT
-            end_signal_close = np.nan
-            reversal_start_date = pd.NaT
-            reversal_end_date = pd.NaT
-
-        signal_rows.append({
-            "factor_id": factor_id,
-            "factor_name": factor_name,
-            "segment_id": segment_id,
-            "trend": row.get("trend", np.nan),
-            "reversal_segment_id": reversal_segment_id,
-            "reversal_trend": row.get("reversal_trend", np.nan),
-            "realtime_trend": row.get("realtime_trend", np.nan),
-            "matched_segment_id": matched_segment_id,
-            "matched_segment_trend": matched_segment_trend,
-            "matched_segment_source": matched_segment_source,
-            "signal_date": row["date"],
-            "signal_close": row["close"],
-            "factor_value": row["factor_value"],
-            "position": row["position"],
-            "position_scale": row["position_scale"],
-            "is_reversal_window": row["is_reversal_window"],
-            "is_effective_signal": row["is_effective_signal"],
-            "end_date": end_date,
-            "end_close": end_close,
-            "end_signal_date": end_signal_date,
-            "end_signal_close": end_signal_close,
-            "reversal_start_date": reversal_start_date,
-            "reversal_end_date": reversal_end_date,
-            "days_to_trend_end": days_to_trend_end,
-        })
-
-    return pd.DataFrame(signal_rows, columns=signal_columns)
-
-
-def build_summary_table(daily, segments, factor_id, factor_name,
-                        feature_columns, target_trend=None):
-    result_rows = []
-
-    if target_trend is not None:
-        evaluated_segments = segments[segments["trend"] == target_trend]
+    if len(signal_points) > 0:
+        first_signal_date = signal_points["date"].min()
+        first_signal_close = signal_points.loc[
+            signal_points["date"].idxmin(),
+            "close"
+        ]
     else:
-        evaluated_segments = segments
+        first_signal_date = pd.NaT
+        first_signal_close = np.nan
 
-    for _, seg in evaluated_segments.iterrows():
-        segment_id = seg["segment_id"]
-        part = daily[daily["segment_id"] == segment_id].copy()
+    row = {
+        "factor_id": factor_id,
+        "factor_name": factor_name,
+        "total_days": len(daily),
+        "valid_factor_days": int(daily["factor_value"].notna().sum()),
+        "signal_days": int(daily["signal"].sum()),
+        "signal_ratio": daily["signal"].mean(),
+        "first_signal_date": first_signal_date,
+        "first_signal_close": first_signal_close,
+        "mean_factor_value": daily["factor_value"].mean(),
+        "max_factor_value": daily["factor_value"].max(),
+        "min_factor_value": daily["factor_value"].min(),
+    }
 
-        if len(part) == 0:
+    for col in feature_columns:
+        if col not in daily.columns:
             continue
 
-        reversal_part = daily[
-            daily["reversal_segment_id"] == segment_id
-        ].copy()
+        if not pd.api.types.is_numeric_dtype(daily[col]):
+            continue
 
-        signal_part = part[part["signal"] == 1].copy()
-        effective_signal_part = reversal_part[
-            reversal_part["is_effective_signal"] == 1
-        ].copy()
+        row[f"mean_{col}"] = daily[col].mean()
 
-        if len(signal_part) > 0:
-            first_signal_date = signal_part["date"].min()
-            first_signal_close = signal_part.loc[
-                signal_part["date"].idxmin(),
-                "close"
-            ]
-            days_to_end_first_signal = (
-                seg["end_date"] - first_signal_date
-            ).days
-        else:
-            first_signal_date = pd.NaT
-            first_signal_close = np.nan
-            days_to_end_first_signal = np.nan
-
-        if len(effective_signal_part) > 0:
-            first_effective_signal_date = (
-                effective_signal_part["date"].min()
-            )
-            first_effective_signal_close = effective_signal_part.loc[
-                effective_signal_part["date"].idxmin(),
-                "close"
-            ]
-            days_to_end_first_effective_signal = (
-                seg["end_date"] - first_effective_signal_date
-            ).days
-        else:
-            first_effective_signal_date = pd.NaT
-            first_effective_signal_close = np.nan
-            days_to_end_first_effective_signal = np.nan
-
-        row = {
-            "factor_id": factor_id,
-            "factor_name": factor_name,
-            "target_trend": target_trend,
-            "segment_id": segment_id,
-            "trend": seg["trend"],
-            "start_date": seg["start_date"],
-            "end_date": seg["end_date"],
-            "end_signal_date": seg.get("end_signal_date", pd.NaT),
-            "reversal_start_date": seg.get("reversal_start_date", pd.NaT),
-            "reversal_end_date": seg.get("reversal_end_date", pd.NaT),
-            "days": seg["days"],
-            "return": seg["return"],
-            "signal_days_in_trend": part["signal"].sum(),
-            "signal_ratio_in_trend": part["signal"].mean(),
-            "signal_days_in_reversal_window": (
-                reversal_part["signal"].sum()
-            ),
-            "signal_ratio_in_reversal_window": (
-                reversal_part["signal"].mean()
-            ),
-            "has_signal": int(part["signal"].sum() > 0),
-            "has_effective_signal": int(
-                reversal_part["is_effective_signal"].sum() > 0
-            ),
-            "first_signal_date": first_signal_date,
-            "first_signal_close": first_signal_close,
-            "days_to_end_first_signal": days_to_end_first_signal,
-            "first_effective_signal_date": first_effective_signal_date,
-            "first_effective_signal_close": first_effective_signal_close,
-            "days_to_end_first_effective_signal": (
-                days_to_end_first_effective_signal
-            ),
-            "max_factor_value_in_trend": part["factor_value"].max(),
-            "mean_factor_value_in_trend": part["factor_value"].mean(),
-            "max_factor_value_in_reversal_window": (
-                reversal_part["factor_value"].max()
-            ),
-            "mean_factor_value_in_reversal_window": (
-                reversal_part["factor_value"].mean()
-            ),
-        }
-
-        for col in feature_columns:
-            if col not in daily.columns:
-                continue
-
-            if not pd.api.types.is_numeric_dtype(daily[col]):
-                continue
-
-            row[f"mean_{col}_in_trend"] = part[col].mean()
-            row[f"mean_{col}_in_reversal_window"] = (
-                reversal_part[col].mean()
-            )
-
-        result_rows.append(row)
-
-    return pd.DataFrame(result_rows)
+    return pd.DataFrame([row])
 
 
 def save_factor_outputs(
     daily,
-    segments,
     symbol,
     factor_id,
     factor_name,
@@ -499,11 +335,9 @@ def save_factor_outputs(
     position_scale_on_signal,
     feature_columns,
     figure_feature_columns=None,
-    target_trend=None,
     signal_holding_days=1,
 ):
     daily = daily.copy()
-    daily = add_reversal_trend_labels(daily, segments)
 
     daily["factor_id"] = factor_id
     daily["factor_name"] = factor_name
@@ -527,18 +361,6 @@ def save_factor_outputs(
 
     # Backward-compatible alias for older backtest/output code.
     daily["position_scale"] = daily["position"]
-
-    effective_mask = (
-        (daily["signal"] == 1) &
-        (daily["is_reversal_window"] == 1)
-    )
-
-    if target_trend is not None:
-        effective_mask = effective_mask & (
-            daily["reversal_trend"] == target_trend
-        )
-
-    daily["is_effective_signal"] = effective_mask.astype(int)
 
     tables_dir = os.path.join(project_root, "results", "tables")
     figures_dir = os.path.join(project_root, "results", "figures")
@@ -578,16 +400,6 @@ def save_factor_outputs(
         "open_interest",
         "speculation",
         "threshold",
-        "realtime_trend",
-        "realtime_position",
-        "realtime_segment_id",
-        "trend",
-        "segment_id",
-        "is_reversal_window",
-        "reversal_segment_id",
-        "reversal_trend",
-        "is_uptrend_reversal_window",
-        "is_downtrend_reversal_window",
         "factor_id",
         "factor_name",
         "factor_value",
@@ -599,7 +411,6 @@ def save_factor_outputs(
         "signal",
         "position",
         "position_scale",
-        "is_effective_signal",
     ]:
         if col in daily.columns and col not in output_columns:
             output_columns.append(col)
@@ -607,17 +418,15 @@ def save_factor_outputs(
     factor_daily = daily[output_columns].copy()
     signal_table = build_signal_table(
         daily,
-        segments,
-        factor_id,
-        factor_name,
-    )
-    summary_table = build_summary_table(
-        daily,
-        segments,
         factor_id,
         factor_name,
         feature_columns,
-        target_trend=target_trend,
+    )
+    summary_table = build_summary_table(
+        daily,
+        factor_id,
+        factor_name,
+        feature_columns,
     )
 
     os.makedirs(os.path.dirname(factor_output_path), exist_ok=True)
@@ -633,20 +442,12 @@ def save_factor_outputs(
     plt.plot(daily["date"], daily["close"], label="close")
 
     signal_points = daily[daily["signal"] == 1]
-    effective_points = daily[daily["is_effective_signal"] == 1]
 
     plt.scatter(
         signal_points["date"],
         signal_points["close"],
         s=22,
         label="signal",
-    )
-    plt.scatter(
-        effective_points["date"],
-        effective_points["close"],
-        s=48,
-        marker="X",
-        label="effective signal",
     )
     plt.title(f"{symbol} Factor {factor_id}: {factor_name}")
     plt.xlabel("Date")
@@ -687,8 +488,6 @@ def save_factor_outputs(
     print(
         "signal days:",
         int(daily["signal"].sum()),
-        "effective days:",
-        int(daily["is_effective_signal"].sum()),
     )
 
     return {

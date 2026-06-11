@@ -1,7 +1,9 @@
-import os
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
+from volume_price_factor_utils import (
+    load_daily,
+    mad_score,
+    save_factor_outputs,
+)
+
 
 # =========================
 # 参数设置
@@ -12,130 +14,57 @@ symbol = "LC"
 factor_id = "31"
 factor_name = "price_up_speculation_up"
 
-# 均线多头排列窗口
+# 价格均线多头排列窗口。
+# ma5 > ma10 > ma20 表示短期价格均线高于中期，中期高于长期；
+# 这是原因子里判断“价格已经偏强”的第一层条件。
 ma_short_window = 5
 ma_mid_window = 10
 ma_long_window = 20
 
-# 持仓量均线窗口
+# 持仓量均线窗口。
+# open_interest_ma_5 > open_interest_ma_10 表示短期持仓量高于中期持仓量；
+# 这是原因子里判断“资金参与度也偏强”的第二层条件。
 open_interest_short_window = 5
 open_interest_mid_window = 10
 
-# 过去多少天作为投机度历史参照
+# 过去多少天作为投机度历史参照。
+# MAD 相关的历史中位数和历史 MAD 都只使用今天以前的数据，不包含今天；
+# 这样今天的投机度只是待判断对象，不会进入自己的基准样本。
 spec_window = 10
 
-# 投机度突然升高的阈值
-# MAD score >= 1 表示今天投机度明显高于过去一段时间
+# 投机度突然升高的阈值。
+# MAD score >= 1 表示今天投机度相对过去一段时间明显偏高；
+# 最终信号要求价格均线偏强、持仓量均线偏强、投机度 MAD score 达标三者同时成立。
 spec_mad_threshold = 1
 
-# MAD 缩放系数，把 MAD 调整到类似标准差的尺度
+# MAD 缩放系数和极小值保护沿用公共 mad_score() 的默认值：
+# 1.4826 把 MAD 调整到类似标准差的尺度；
+# 1e-12 只是在分母上做极小值保护，同时 MAD <= 0 时仍会被设为 NaN。
 mad_scale = 1.4826
-
-# 避免 MAD 为 0
 mad_epsilon = 1e-12
 
-# 最小历史天数
+# 最小历史天数。
+# 当过去有效投机度样本少于该值时，不计算 MAD score，避免早期样本太短导致误判。
 min_history_days = 5
 
-# 触发信号后，建议仓位比例
+# 触发信号后，建议仓位比例。
+# 没有信号时公共输出函数保持 1.0；有信号时改为这里的 0。
 signal_position_scale = 0
 
-price_figsize = (12, 6)
-factor_figsize = (12, 5)
-signal_point_size = 20
-plot_dpi = 300
+
+# =========================
+# 1. 读取日频数据
+# =========================
+
+daily = load_daily(symbol)
 
 
 # =========================
-# 输入路径
+# 2. 计算价格和持仓量均线条件
 # =========================
-
-daily_input_path = f"../../results/tables/daily/{symbol}_daily_with_trend.csv"
-segments_input_path = f"../../results/tables/daily/{symbol}_trend_segments.csv"
-
-# 如果 prepare_data.py 还没有改成 daily 文件夹，则自动读取旧路径
-if not os.path.exists(daily_input_path):
-    daily_input_path = f"../../results/tables/{symbol}_daily_with_trend.csv"
-
-if not os.path.exists(segments_input_path):
-    segments_input_path = f"../../results/tables/{symbol}_trend_segments.csv"
-
-
-# =========================
-# 输出路径
-# =========================
-
-factor_output_path = (
-    f"../../results/tables/factors/{symbol}_{factor_id}_{factor_name}.csv"
-)
-
-signal_output_path = (
-    f"../../results/tables/signals/{symbol}_{factor_id}_{factor_name}_signals.csv"
-)
-
-summary_output_path = (
-    f"../../results/tables/summary/{symbol}_{factor_id}_{factor_name}_summary.csv"
-)
-
-price_figure_path = (
-    f"../../results/figures/{symbol}_{factor_id}_{factor_name}_signal_on_price.png"
-)
-
-factor_figure_path = (
-    f"../../results/figures/{symbol}_{factor_id}_{factor_name}_factor_value.png"
-)
-
-price_speculation_figure_path = (
-    f"../../results/figures/{symbol}_{factor_id}_{factor_name}_price_and_speculation.png"
-)
-
-
-# =========================
-# 1. 读取已经做好的趋势数据
-# =========================
-
-daily = pd.read_csv(daily_input_path)
-segments = pd.read_csv(segments_input_path)
-
-daily["date"] = pd.to_datetime(daily["date"])
-segments["start_date"] = pd.to_datetime(segments["start_date"])
-segments["end_date"] = pd.to_datetime(segments["end_date"])
-
-if "end_signal_date" in segments.columns:
-    segments["end_signal_date"] = pd.to_datetime(segments["end_signal_date"])
-
-if "reversal_start_date" in segments.columns:
-    segments["reversal_start_date"] = pd.to_datetime(
-        segments["reversal_start_date"]
-    )
-
-if "reversal_end_date" in segments.columns:
-    segments["reversal_end_date"] = pd.to_datetime(
-        segments["reversal_end_date"]
-    )
-
-
-# =========================
-# 2. 检查是否有趋势反转段标签
-# =========================
-
-if "is_reversal_window" not in daily.columns:
-    daily["is_reversal_window"] = 0
-
-if "reversal_segment_id" not in daily.columns:
-    daily["reversal_segment_id"] = np.nan
-
-
-# =========================
-# 3. 计算均线多头排列
-# =========================
-# ma5 > ma10 > ma20 表示短中长期均线多头排列
-# open interest ma5 > ma10 表示短期持仓量高于中期持仓量
-#
-# 注意：
-# 这里价格均线包含今天的收盘价，持仓量均线包含今天的持仓量。
-# 如果你之后真实交易，为了避免用当天收盘后信号交易当天，
-# 回测时应该用 signal.shift(1) 后的仓位赚下一天收益。
+# 注意：价格均线包含今天的收盘价，持仓量均线包含今天的持仓量。
+# 这和原实现一致。若之后用于真实交易或回测，仍应在回测端使用 signal.shift(1)
+# 产生下一交易日仓位，避免用当天收盘后才确认的信号交易当天。
 
 daily["daily_return"] = daily["close"].pct_change()
 
@@ -144,13 +73,11 @@ daily["price_ma_5"] = (
     .rolling(window=ma_short_window, min_periods=ma_short_window)
     .mean()
 )
-
 daily["price_ma_10"] = (
     daily["close"]
     .rolling(window=ma_mid_window, min_periods=ma_mid_window)
     .mean()
 )
-
 daily["price_ma_20"] = (
     daily["close"]
     .rolling(window=ma_long_window, min_periods=ma_long_window)
@@ -166,16 +93,15 @@ daily["open_interest_ma_5"] = (
     daily["open_interest"]
     .rolling(
         window=open_interest_short_window,
-        min_periods=open_interest_short_window
+        min_periods=open_interest_short_window,
     )
     .mean()
 )
-
 daily["open_interest_ma_10"] = (
     daily["open_interest"]
     .rolling(
         window=open_interest_mid_window,
-        min_periods=open_interest_mid_window
+        min_periods=open_interest_mid_window,
     )
     .mean()
 )
@@ -186,494 +112,121 @@ daily["is_open_interest_ma_bullish"] = (
 
 
 # =========================
-# 4. 计算投机度突然升高：MAD 方法
+# 3. 计算投机度突然升高：MAD 方法
 # =========================
-# 用今天投机度和过去 spec_window 天投机度比较。
-#
-# speculation_median_past:
-#   过去 spec_window 天投机度中位数，不包含今天
-#
-# speculation_mad_past:
-#   过去 spec_window 天投机度的 MAD，不包含今天
-#
-# speculation_mad_score:
-#   今天投机度相对过去一段时间的 MAD 标准化偏离
-#
-# 好处：
+# mad_score() 等价于原来的手写逻辑：
+# 1. speculation_median_past 是过去 spec_window 天投机度中位数，不包含今天；
+# 2. speculation_mad_past 是过去 spec_window 天投机度的 MAD，不包含今天；
+# 3. speculation_mad_score = (今天投机度 - 历史中位数) / (1.4826 * 历史 MAD + 1e-12)；
+# 4. 当历史 MAD <= 0 时，MAD score 设为 NaN，避免无波动窗口导致分数失真。
 # MAD 比均值和标准差更稳健，不容易被极端值影响。
 
-daily["speculation_median_past"] = (
-    daily["speculation"]
-    .rolling(window=spec_window, min_periods=min_history_days)
-    .median()
-    .shift(1)
+(
+    daily["speculation_median_past"],
+    daily["speculation_mad_past"],
+    daily["speculation_mad_score"],
+) = mad_score(
+    daily["speculation"],
+    window=spec_window,
+    min_history_days=min_history_days,
+    mad_scale=mad_scale,
+    mad_epsilon=mad_epsilon,
 )
 
-daily["speculation_mad_past"] = np.nan
-
-for i in range(len(daily)):
-
-    start_i = max(0, i - spec_window)
-
-    history = daily.iloc[start_i:i]["speculation"].dropna()
-
-    if len(history) < min_history_days:
-        continue
-
-    median_value = history.median()
-
-    mad_value = (history - median_value).abs().median()
-
-    daily.loc[daily.index[i], "speculation_mad_past"] = mad_value
-
-
-daily["speculation_mad_score"] = (
-    (daily["speculation"] - daily["speculation_median_past"]) /
-    (mad_scale * daily["speculation_mad_past"] + mad_epsilon)
-)
-
-# 如果 MAD 为 0，说明过去这段时间投机度几乎没有波动，
-# 此时 MAD score 不稳定，设为 NaN
-daily.loc[
-    daily["speculation_mad_past"] <= 0,
-    "speculation_mad_score"
-] = np.nan
-
 
 # =========================
-# 5. 生成因子信号
+# 4. 生成因子信号
 # =========================
-# 这个因子主要用于上涨趋势：
-# 价格均线呈多头排列，持仓量短期均线高于中期均线，
-# 同时投机度突然升高。
-#
-# 直觉：
-# 趋势已经涨了一段，持仓量和投机度同时升高，
-# 可能代表跟风资金集中进入，
-# 行情可能进入过热阶段。
+# 这个因子关注价格和持仓量同时偏强时的投机度升高：
+# 价格均线呈多头排列，持仓量短期均线高于中期均线，同时投机度突然升高。
+# 直觉上，这代表价格已经上涨一段，持仓量和投机度同时升高，
+# 可能是跟风资金集中进入，行情进入过热阶段。
 
-daily["price_up_speculation_up_signal"] = 0
-
-daily.loc[
-    (
-        daily["is_ma_bullish"] == 1
-    ) & (
-        daily["is_open_interest_ma_bullish"] == 1
-    ) & (
-        daily["speculation_mad_score"] >= spec_mad_threshold
-    ),
-    "price_up_speculation_up_signal"
-] = 1
-
-
-# =========================
-# 6. 生成标准化因子每日表
-# =========================
-
-daily["factor_id"] = factor_id
-daily["factor_name"] = factor_name
-
-# 主因子值：
-# 这里用 speculation_mad_score 作为 factor_value
-# 因为这个因子真正衡量的是“投机度突然变大”的程度
-daily["factor_value"] = daily["speculation_mad_score"]
-
-daily["signal"] = daily["price_up_speculation_up_signal"]
-
-daily["position_scale"] = 1.0
-daily.loc[daily["signal"] == 1, "position_scale"] = signal_position_scale
-
-# 是否为有效信号：
-# 只有在趋势反转段内触发信号，才算有效
-daily["is_effective_signal"] = (
-    (daily["signal"] == 1) &
-    (daily["is_reversal_window"] == 1)
+daily["price_up_speculation_up_signal"] = (
+    (daily["is_ma_bullish"] == 1) &
+    (daily["is_open_interest_ma_bullish"] == 1) &
+    (daily["speculation_mad_score"] >= spec_mad_threshold)
 ).astype(int)
 
 
-factor_daily = daily[
-    [
-        "date",
-        "close",
-        "trend",
-        "segment_id",
-        "is_reversal_window",
-        "reversal_segment_id",
+# =========================
+# 5. 保存标准化结果
+# =========================
+# factor_value 仍然使用 speculation_mad_score，和原实现一致。
+# feature_columns 会进入因子每日表、信号事件表和汇总表；
+# 公共函数会统一生成 factor_id、factor_name、signal、position、position_scale，
+# 并负责保存 CSV 与基础图形输出。
 
-        "factor_id",
-        "factor_name",
-        "factor_value",
+feature_columns = [
+    "daily_return",
+    "price_ma_5",
+    "price_ma_10",
+    "price_ma_20",
+    "is_ma_bullish",
+    "open_interest",
+    "open_interest_ma_5",
+    "open_interest_ma_10",
+    "is_open_interest_ma_bullish",
+    "speculation",
+    "speculation_median_past",
+    "speculation_mad_past",
+    "speculation_mad_score",
+]
 
-        "daily_return",
+result = save_factor_outputs(
+    daily=daily,
+    symbol=symbol,
+    factor_id=factor_id,
+    factor_name=factor_name,
+    factor_value_column="speculation_mad_score",
+    signal_column="price_up_speculation_up_signal",
+    position_scale_on_signal=signal_position_scale,
+    feature_columns=feature_columns,
+    figure_feature_columns=[
         "price_ma_5",
         "price_ma_10",
         "price_ma_20",
-        "is_ma_bullish",
-
-        "open_interest",
-        "open_interest_ma_5",
-        "open_interest_ma_10",
-        "is_open_interest_ma_bullish",
-
-        "speculation",
-        "speculation_median_past",
-        "speculation_mad_past",
         "speculation_mad_score",
-
-        "signal",
-        "position_scale",
-        "is_effective_signal",
-    ]
-].copy()
-
-
-# =========================
-# 7. 生成标准化信号事件表
-# =========================
-
-signal_points = daily[daily["signal"] == 1].copy()
-
-print("检测到的信号日期：")
-print(signal_points["date"].dt.strftime("%Y-%m-%d").to_list())
-
-signal_rows = []
-
-for _, row in signal_points.iterrows():
-
-    segment_id = row["segment_id"]
-
-    matched_segment = segments[segments["segment_id"] == segment_id]
-
-    if len(matched_segment) == 0:
-        continue
-
-    seg = matched_segment.iloc[0]
-
-    signal_date = row["date"]
-    end_date = seg["end_date"]
-
-    days_to_trend_end = (end_date - signal_date).days
-
-    signal_rows.append({
-        "factor_id": factor_id,
-        "factor_name": factor_name,
-
-        "segment_id": segment_id,
-        "trend": row["trend"],
-
-        "signal_date": signal_date,
-        "signal_close": row["close"],
-
-        "factor_value": row["factor_value"],
-        "price_ma_5": row["price_ma_5"],
-        "price_ma_10": row["price_ma_10"],
-        "price_ma_20": row["price_ma_20"],
-        "is_ma_bullish": row["is_ma_bullish"],
-        "open_interest": row["open_interest"],
-        "open_interest_ma_5": row["open_interest_ma_5"],
-        "open_interest_ma_10": row["open_interest_ma_10"],
-        "is_open_interest_ma_bullish": (
-            row["is_open_interest_ma_bullish"]
-        ),
-        "speculation": row["speculation"],
-        "speculation_mad_score": row["speculation_mad_score"],
-
-        "position_scale": row["position_scale"],
-
-        "is_reversal_window": row["is_reversal_window"],
-        "is_effective_signal": row["is_effective_signal"],
-
-        "end_date": seg["end_date"],
-        "end_close": seg["end_close"],
-
-        "end_signal_date": seg.get("end_signal_date", pd.NaT),
-        "end_signal_close": seg.get("end_signal_close", np.nan),
-
-        "reversal_start_date": seg.get("reversal_start_date", pd.NaT),
-        "reversal_end_date": seg.get("reversal_end_date", pd.NaT),
-
-        "days_to_trend_end": days_to_trend_end,
-    })
-
-signal_table = pd.DataFrame(signal_rows)
-
-
-# =========================
-# 8. 按趋势段汇总
-# =========================
-
-trend_daily = daily[daily["trend"] != "no_trend"].copy()
-
-result_rows = []
-
-for _, seg in segments.iterrows():
-
-    segment_id = seg["segment_id"]
-
-    part = trend_daily[trend_daily["segment_id"] == segment_id].copy()
-
-    if len(part) == 0:
-        continue
-
-    reversal_part = daily[
-        daily["reversal_segment_id"] == segment_id
-    ].copy()
-
-    signal_part = part[part["signal"] == 1].copy()
-
-    effective_signal_part = reversal_part[
-        reversal_part["is_effective_signal"] == 1
-    ].copy()
-
-    if len(signal_part) > 0:
-        first_signal_date = signal_part["date"].min()
-        first_signal_close = signal_part.loc[
-            signal_part["date"].idxmin(), "close"
-        ]
-        days_to_end_first_signal = (
-            seg["end_date"] - first_signal_date
-        ).days
-    else:
-        first_signal_date = pd.NaT
-        first_signal_close = np.nan
-        days_to_end_first_signal = np.nan
-
-    if len(effective_signal_part) > 0:
-        first_effective_signal_date = effective_signal_part["date"].min()
-        first_effective_signal_close = effective_signal_part.loc[
-            effective_signal_part["date"].idxmin(), "close"
-        ]
-        days_to_end_first_effective_signal = (
-            seg["end_date"] - first_effective_signal_date
-        ).days
-    else:
-        first_effective_signal_date = pd.NaT
-        first_effective_signal_close = np.nan
-        days_to_end_first_effective_signal = np.nan
-
-    result_rows.append({
-        "factor_id": factor_id,
-        "factor_name": factor_name,
-
-        "segment_id": segment_id,
-        "trend": seg["trend"],
-
-        "start_date": seg["start_date"],
-        "end_date": seg["end_date"],
-        "end_signal_date": seg.get("end_signal_date", pd.NaT),
-
-        "reversal_start_date": seg.get("reversal_start_date", pd.NaT),
-        "reversal_end_date": seg.get("reversal_end_date", pd.NaT),
-
-        "days": seg["days"],
-        "return": seg["return"],
-
-        # 整个趋势段内的信号情况
-        "signal_days_in_trend": part["signal"].sum(),
-        "signal_ratio_in_trend": part["signal"].mean(),
-
-        # 趋势反转段内的信号情况
-        "signal_days_in_reversal_window": reversal_part["signal"].sum(),
-        "signal_ratio_in_reversal_window": reversal_part["signal"].mean(),
-
-        # 是否有信号
-        "has_signal": int(part["signal"].sum() > 0),
-
-        # 是否有有效信号
-        "has_effective_signal": int(
-            reversal_part["is_effective_signal"].sum() > 0
-        ),
-
-        # 第一次信号
-        "first_signal_date": first_signal_date,
-        "first_signal_close": first_signal_close,
-        "days_to_end_first_signal": days_to_end_first_signal,
-
-        # 第一次有效信号
-        "first_effective_signal_date": first_effective_signal_date,
-        "first_effective_signal_close": first_effective_signal_close,
-        "days_to_end_first_effective_signal": (
-            days_to_end_first_effective_signal
-        ),
-
-        # 反转段内因子表现
-        "max_factor_value_in_reversal_window": (
-            reversal_part["factor_value"].max()
-        ),
-        "mean_factor_value_in_reversal_window": (
-            reversal_part["factor_value"].mean()
-        ),
-
-        "ma_bullish_days_in_reversal_window": (
-            reversal_part["is_ma_bullish"].sum()
-        ),
-        "ma_bullish_ratio_in_reversal_window": (
-            reversal_part["is_ma_bullish"].mean()
-        ),
-        "open_interest_ma_bullish_days_in_reversal_window": (
-            reversal_part["is_open_interest_ma_bullish"].sum()
-        ),
-        "open_interest_ma_bullish_ratio_in_reversal_window": (
-            reversal_part["is_open_interest_ma_bullish"].mean()
-        ),
-        "max_speculation_mad_score_in_reversal_window": (
-            reversal_part["speculation_mad_score"].max()
-        ),
-        "mean_speculation_mad_score_in_reversal_window": (
-            reversal_part["speculation_mad_score"].mean()
-        ),
-    })
-
-factor_summary = pd.DataFrame(result_rows)
-
-
-# =========================
-# 9. 保存结果表格
-# =========================
-
-os.makedirs(os.path.dirname(factor_output_path), exist_ok=True)
-os.makedirs(os.path.dirname(signal_output_path), exist_ok=True)
-os.makedirs(os.path.dirname(summary_output_path), exist_ok=True)
-
-factor_daily.to_csv(factor_output_path, index=False)
-signal_table.to_csv(signal_output_path, index=False)
-factor_summary.to_csv(summary_output_path, index=False)
-
-print(
-    f"因子 {factor_id}：均线多头 + 持仓量均线多头 + "
-    "投机度突然升高分析完成。"
-)
-print(f"因子每日值表保存为：{factor_output_path}")
-print(f"因子信号事件表保存为：{signal_output_path}")
-print(f"趋势段汇总表保存为：{summary_output_path}")
-
-
-# =========================
-# 10. 画图：价格、信号、有效信号
-# =========================
-
-plt.figure(figsize=price_figsize)
-
-plt.plot(daily["date"], daily["close"], label="close")
-
-signal_points = daily[daily["signal"] == 1]
-effective_points = daily[daily["is_effective_signal"] == 1]
-
-plt.scatter(
-    signal_points["date"],
-    signal_points["close"],
-    s=signal_point_size,
-    label="MA bullish + OI MA bullish + speculation up signal"
+    ],
 )
 
-plt.scatter(
-    effective_points["date"],
-    effective_points["close"],
-    s=signal_point_size * 2,
-    marker="X",
-    label="effective signal in reversal window"
-)
-
-plt.title(f"{symbol} Close Price and Factor 31 Signal")
-plt.xlabel("Date")
-plt.ylabel("Close Price")
-plt.legend()
-plt.tight_layout()
-
-os.makedirs(os.path.dirname(price_figure_path), exist_ok=True)
-plt.savefig(price_figure_path, dpi=plot_dpi)
-plt.close()
-
 
 # =========================
-# 11. 画图：价格和投机度
+# 6. 补充因子参数到汇总表
 # =========================
+# 公共函数已经生成整体汇总表；这里补上本因子特有参数和原汇总中关注的统计量。
+# 这样之后只看 summary 文件，也能知道价格均线窗口、持仓量均线窗口、
+# 投机度 MAD 窗口、MAD 阈值，以及三类条件分别出现了多少天。
 
-fig, ax1 = plt.subplots(figsize=price_figsize)
-
-ax1.plot(daily["date"], daily["close"], label="close", color="tab:blue")
-ax1.set_xlabel("Date")
-ax1.set_ylabel("Close Price", color="tab:blue")
-ax1.tick_params(axis="y", labelcolor="tab:blue")
-
-ax2 = ax1.twinx()
-ax2.plot(
-    daily["date"],
-    daily["speculation"],
-    label="speculation",
-    color="tab:orange"
+summary_table = result["summary_table"].copy()
+summary_table["ma_short_window"] = ma_short_window
+summary_table["ma_mid_window"] = ma_mid_window
+summary_table["ma_long_window"] = ma_long_window
+summary_table["open_interest_short_window"] = open_interest_short_window
+summary_table["open_interest_mid_window"] = open_interest_mid_window
+summary_table["spec_window"] = spec_window
+summary_table["spec_mad_threshold"] = spec_mad_threshold
+summary_table["mad_scale"] = mad_scale
+summary_table["mad_epsilon"] = mad_epsilon
+summary_table["min_history_days"] = min_history_days
+summary_table["ma_bullish_days"] = int(daily["is_ma_bullish"].sum())
+summary_table["ma_bullish_ratio"] = daily["is_ma_bullish"].mean()
+summary_table["open_interest_ma_bullish_days"] = int(
+    daily["is_open_interest_ma_bullish"].sum()
 )
-ax2.set_ylabel("Speculation", color="tab:orange")
-ax2.tick_params(axis="y", labelcolor="tab:orange")
-
-plt.title(f"{symbol} Close Price and Speculation")
-fig.tight_layout()
-
-os.makedirs(os.path.dirname(price_speculation_figure_path), exist_ok=True)
-plt.savefig(price_speculation_figure_path, dpi=plot_dpi)
-plt.close()
-
-
-# =========================
-# 12. 画图：价格均线和投机度 MAD score
-# =========================
-
-fig, ax1 = plt.subplots(figsize=factor_figsize)
-
-ax1.plot(
-    daily["date"],
-    daily["price_ma_5"],
-    label="MA5",
-    color="tab:blue"
-)
-
-ax1.plot(
-    daily["date"],
-    daily["price_ma_10"],
-    label="MA10",
-    color="tab:green"
-)
-
-ax1.plot(
-    daily["date"],
-    daily["price_ma_20"],
-    label="MA20",
-    color="tab:purple"
-)
-
-ax1.set_xlabel("Date")
-ax1.set_ylabel("Moving Average")
-ax1.tick_params(axis="y")
-
-ax2 = ax1.twinx()
-ax2.plot(
-    daily["date"],
-    daily["speculation_mad_score"],
-    label="speculation MAD score",
-    color="tab:orange"
-)
-
-ax2.axhline(
-    spec_mad_threshold,
-    linestyle=":",
-    color="tab:red",
-    label="speculation MAD threshold"
-)
-
-ax2.set_ylabel("Speculation MAD Score")
-
-lines_1, labels_1 = ax1.get_legend_handles_labels()
-lines_2, labels_2 = ax2.get_legend_handles_labels()
-ax1.legend(lines_1 + lines_2, labels_1 + labels_2)
-
-plt.title("Factor 31: Moving Average Bullish Alignment and Speculation MAD Score")
-fig.tight_layout()
-
-os.makedirs(os.path.dirname(factor_figure_path), exist_ok=True)
-plt.savefig(factor_figure_path, dpi=plot_dpi)
-plt.close()
-
-print("\n图片保存为：")
-print(price_figure_path)
-print(price_speculation_figure_path)
-print(factor_figure_path)
+summary_table["open_interest_ma_bullish_ratio"] = daily[
+    "is_open_interest_ma_bullish"
+].mean()
+summary_table["mean_speculation_mad_score"] = daily[
+    "speculation_mad_score"
+].mean()
+summary_table["max_speculation_mad_score"] = daily[
+    "speculation_mad_score"
+].max()
+summary_table["min_speculation_mad_score"] = daily[
+    "speculation_mad_score"
+].min()
+summary_table["mean_daily_return"] = daily["daily_return"].mean()
+summary_table["max_daily_return"] = daily["daily_return"].max()
+summary_table["min_daily_return"] = daily["daily_return"].min()
+summary_table.to_csv(result["summary_output_path"], index=False)

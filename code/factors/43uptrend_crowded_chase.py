@@ -1,6 +1,6 @@
 from volume_price_factor_utils import (
     add_volume_price_features,
-    load_daily_and_segments,
+    load_daily,
     positive_part,
     save_factor_outputs,
 )
@@ -15,10 +15,10 @@ oi_ret_5_threshold = 0.05
 volume_mad_threshold = 1.2
 range_mad_threshold = 1.2
 close_location_threshold = 0.95
-signal_position_scale = -1
+signal_position_scale = 0
 
 
-daily, segments = load_daily_and_segments(symbol)
+daily = load_daily(symbol)
 daily = add_volume_price_features(daily)
 
 daily["crowded_chase_score"] = (
@@ -31,8 +31,6 @@ daily["crowded_chase_score"] = (
 daily["uptrend_crowded_chase_signal"] = 0
 daily.loc[
     (
-        daily["realtime_trend"] == "up_trend"
-    ) & (
         daily["close_rank_20"] >= price_rank_threshold
     ) & (
         daily["ret_5"] > 0
@@ -50,7 +48,6 @@ daily.loc[
 feature_columns = [
     "daily_return",
     "ret_5",
-    "realtime_trend_age",
     "close_rank_20",
     "close_rank_60",
     "oi_ret_5",
@@ -64,7 +61,6 @@ feature_columns = [
 
 save_factor_outputs(
     daily=daily,
-    segments=segments,
     symbol=symbol,
     factor_id=factor_id,
     factor_name=factor_name,
@@ -79,5 +75,4 @@ save_factor_outputs(
         "volume_mad_score",
         "range_mad_score",
     ],
-    target_trend="up_trend",
 )
