@@ -1,0 +1,3 @@
+factor_id,factor_name,strategy,total_return,annual_return,max_drawdown,annual_volatility,sharpe,signal_days,signal_ratio
+32,price_down_speculation_up,base_long_only_simple,-1.136481628148187,-0.4306667222456283,-1.7893223361205859,0.4330352209865258,-0.9945304709037254,12,0.01804511278195489
+32,price_down_speculation_up,factor_position_simple,-1.1029093690677163,-0.41794460301513425,-1.753944336781446,0.4323115499634489,-0.966767145246225,12,0.01804511278195489
