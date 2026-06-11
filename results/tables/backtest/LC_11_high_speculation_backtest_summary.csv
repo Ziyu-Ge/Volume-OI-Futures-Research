@@ -1,2 +1,2 @@
 symbol,factor_id,factor_name,annual_return,max_drawdown,sharpe_ratio,win_rate,avg_profit_giveback,num_trades,num_signal_trades,num_effective_signal_trades
-LC,11,high_speculation,-0.060427192843784616,0.61858838485739,0.070317928726169,0.4375,0.5790749064312967,48,19,13
+LC,11,high_speculation,-26232.224372529658,175735.76467729307,-0.4894455449014149,0.5102040816326531,0.5742864329263098,49,19,13
