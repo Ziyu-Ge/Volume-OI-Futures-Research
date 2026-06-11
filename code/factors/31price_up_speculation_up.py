@@ -12,14 +12,17 @@ symbol = "LC"
 factor_id = "31"
 factor_name = "price_up_speculation_up"
 
-# 过去多少天判断“价格大部分时间上涨”
-price_window = 10
+# 均线多头排列窗口
+ma_short_window = 5
+ma_mid_window = 10
+ma_long_window = 20
+
+# 持仓量均线窗口
+open_interest_short_window = 5
+open_interest_mid_window = 10
 
 # 过去多少天作为投机度历史参照
 spec_window = 10
-
-# 过去 price_window 天中，至少多少比例是上涨日
-price_up_ratio_threshold = 0.7
 
 # 投机度突然升高的阈值
 # MAD score >= 1 表示今天投机度明显高于过去一段时间
@@ -35,7 +38,7 @@ mad_epsilon = 1e-12
 min_history_days = 5
 
 # 触发信号后，建议仓位比例
-signal_position_scale = -1
+signal_position_scale = 0
 
 price_figsize = (12, 6)
 factor_figsize = (12, 5)
@@ -124,24 +127,62 @@ if "reversal_segment_id" not in daily.columns:
 
 
 # =========================
-# 3. 计算价格上涨比例
+# 3. 计算均线多头排列
 # =========================
-# return > 0 表示当天价格上涨
-# price_up_ratio 表示过去 price_window 天中，上涨天数占比
+# ma5 > ma10 > ma20 表示短中长期均线多头排列
+# open interest ma5 > ma10 表示短期持仓量高于中期持仓量
 #
 # 注意：
-# 这里 price_up_ratio 包含今天的涨跌情况。
+# 这里价格均线包含今天的收盘价，持仓量均线包含今天的持仓量。
 # 如果你之后真实交易，为了避免用当天收盘后信号交易当天，
 # 回测时应该用 signal.shift(1) 后的仓位赚下一天收益。
 
 daily["daily_return"] = daily["close"].pct_change()
-daily["is_up_day"] = (daily["daily_return"] > 0).astype(int)
 
-daily["price_up_ratio"] = (
-    daily["is_up_day"]
-    .rolling(window=price_window, min_periods=min_history_days)
+daily["price_ma_5"] = (
+    daily["close"]
+    .rolling(window=ma_short_window, min_periods=ma_short_window)
     .mean()
 )
+
+daily["price_ma_10"] = (
+    daily["close"]
+    .rolling(window=ma_mid_window, min_periods=ma_mid_window)
+    .mean()
+)
+
+daily["price_ma_20"] = (
+    daily["close"]
+    .rolling(window=ma_long_window, min_periods=ma_long_window)
+    .mean()
+)
+
+daily["is_ma_bullish"] = (
+    (daily["price_ma_5"] > daily["price_ma_10"]) &
+    (daily["price_ma_10"] > daily["price_ma_20"])
+).astype(int)
+
+daily["open_interest_ma_5"] = (
+    daily["open_interest"]
+    .rolling(
+        window=open_interest_short_window,
+        min_periods=open_interest_short_window
+    )
+    .mean()
+)
+
+daily["open_interest_ma_10"] = (
+    daily["open_interest"]
+    .rolling(
+        window=open_interest_mid_window,
+        min_periods=open_interest_mid_window
+    )
+    .mean()
+)
+
+daily["is_open_interest_ma_bullish"] = (
+    daily["open_interest_ma_5"] > daily["open_interest_ma_10"]
+).astype(int)
 
 
 # =========================
@@ -203,28 +244,21 @@ daily.loc[
 # 5. 生成因子信号
 # =========================
 # 这个因子主要用于上涨趋势：
-# 价格过去一段时间大部分在涨，同时投机度突然升高。
+# 价格均线呈多头排列，持仓量短期均线高于中期均线，
+# 同时投机度突然升高。
 #
 # 直觉：
-# 趋势已经涨了一段，投机度突然升高，可能代表跟风资金集中进入，
+# 趋势已经涨了一段，持仓量和投机度同时升高，
+# 可能代表跟风资金集中进入，
 # 行情可能进入过热阶段。
 
 daily["price_up_speculation_up_signal"] = 0
 
-# daily.loc[
-#     (
-#         daily["trend"] == "up_trend"
-#     ) & (
-#         daily["price_up_ratio"] >= price_up_ratio_threshold
-#     ) & (
-#         daily["speculation_mad_score"] >= spec_mad_threshold
-#     ),
-#     "price_up_speculation_up_signal"
-# ] = 1
-
 daily.loc[
     (
-        daily["price_up_ratio"] >= price_up_ratio_threshold
+        daily["is_ma_bullish"] == 1
+    ) & (
+        daily["is_open_interest_ma_bullish"] == 1
     ) & (
         daily["speculation_mad_score"] >= spec_mad_threshold
     ),
@@ -271,8 +305,15 @@ factor_daily = daily[
         "factor_value",
 
         "daily_return",
-        "is_up_day",
-        "price_up_ratio",
+        "price_ma_5",
+        "price_ma_10",
+        "price_ma_20",
+        "is_ma_bullish",
+
+        "open_interest",
+        "open_interest_ma_5",
+        "open_interest_ma_10",
+        "is_open_interest_ma_bullish",
 
         "speculation",
         "speculation_median_past",
@@ -324,7 +365,16 @@ for _, row in signal_points.iterrows():
         "signal_close": row["close"],
 
         "factor_value": row["factor_value"],
-        "price_up_ratio": row["price_up_ratio"],
+        "price_ma_5": row["price_ma_5"],
+        "price_ma_10": row["price_ma_10"],
+        "price_ma_20": row["price_ma_20"],
+        "is_ma_bullish": row["is_ma_bullish"],
+        "open_interest": row["open_interest"],
+        "open_interest_ma_5": row["open_interest_ma_5"],
+        "open_interest_ma_10": row["open_interest_ma_10"],
+        "is_open_interest_ma_bullish": (
+            row["is_open_interest_ma_bullish"]
+        ),
         "speculation": row["speculation"],
         "speculation_mad_score": row["speculation_mad_score"],
 
@@ -454,11 +504,17 @@ for _, seg in segments.iterrows():
             reversal_part["factor_value"].mean()
         ),
 
-        "max_price_up_ratio_in_reversal_window": (
-            reversal_part["price_up_ratio"].max()
+        "ma_bullish_days_in_reversal_window": (
+            reversal_part["is_ma_bullish"].sum()
         ),
-        "mean_price_up_ratio_in_reversal_window": (
-            reversal_part["price_up_ratio"].mean()
+        "ma_bullish_ratio_in_reversal_window": (
+            reversal_part["is_ma_bullish"].mean()
+        ),
+        "open_interest_ma_bullish_days_in_reversal_window": (
+            reversal_part["is_open_interest_ma_bullish"].sum()
+        ),
+        "open_interest_ma_bullish_ratio_in_reversal_window": (
+            reversal_part["is_open_interest_ma_bullish"].mean()
         ),
         "max_speculation_mad_score_in_reversal_window": (
             reversal_part["speculation_mad_score"].max()
@@ -483,7 +539,10 @@ factor_daily.to_csv(factor_output_path, index=False)
 signal_table.to_csv(signal_output_path, index=False)
 factor_summary.to_csv(summary_output_path, index=False)
 
-print(f"因子 {factor_id}：价格上涨 + 投机度突然升高分析完成。")
+print(
+    f"因子 {factor_id}：均线多头 + 持仓量均线多头 + "
+    "投机度突然升高分析完成。"
+)
 print(f"因子每日值表保存为：{factor_output_path}")
 print(f"因子信号事件表保存为：{signal_output_path}")
 print(f"趋势段汇总表保存为：{summary_output_path}")
@@ -504,7 +563,7 @@ plt.scatter(
     signal_points["date"],
     signal_points["close"],
     s=signal_point_size,
-    label="price up + speculation up signal"
+    label="MA bullish + OI MA bullish + speculation up signal"
 )
 
 plt.scatter(
@@ -556,40 +615,59 @@ plt.close()
 
 
 # =========================
-# 12. 画图：价格上涨比例和投机度 MAD score
+# 12. 画图：价格均线和投机度 MAD score
 # =========================
 
-plt.figure(figsize=factor_figsize)
+fig, ax1 = plt.subplots(figsize=factor_figsize)
 
-plt.plot(
+ax1.plot(
     daily["date"],
-    daily["price_up_ratio"],
-    label="price up ratio"
+    daily["price_ma_5"],
+    label="MA5",
+    color="tab:blue"
 )
 
-plt.plot(
+ax1.plot(
+    daily["date"],
+    daily["price_ma_10"],
+    label="MA10",
+    color="tab:green"
+)
+
+ax1.plot(
+    daily["date"],
+    daily["price_ma_20"],
+    label="MA20",
+    color="tab:purple"
+)
+
+ax1.set_xlabel("Date")
+ax1.set_ylabel("Moving Average")
+ax1.tick_params(axis="y")
+
+ax2 = ax1.twinx()
+ax2.plot(
     daily["date"],
     daily["speculation_mad_score"],
-    label="speculation MAD score"
+    label="speculation MAD score",
+    color="tab:orange"
 )
 
-plt.axhline(
-    price_up_ratio_threshold,
-    linestyle="--",
-    label="price up ratio threshold"
-)
-
-plt.axhline(
+ax2.axhline(
     spec_mad_threshold,
     linestyle=":",
+    color="tab:red",
     label="speculation MAD threshold"
 )
 
-plt.title("Factor 31: Price Up Ratio and Speculation MAD Score")
-plt.xlabel("Date")
-plt.ylabel("Factor Value")
-plt.legend()
-plt.tight_layout()
+ax2.set_ylabel("Speculation MAD Score")
+
+lines_1, labels_1 = ax1.get_legend_handles_labels()
+lines_2, labels_2 = ax2.get_legend_handles_labels()
+ax1.legend(lines_1 + lines_2, labels_1 + labels_2)
+
+plt.title("Factor 31: Moving Average Bullish Alignment and Speculation MAD Score")
+fig.tight_layout()
 
 os.makedirs(os.path.dirname(factor_figure_path), exist_ok=True)
 plt.savefig(factor_figure_path, dpi=plot_dpi)

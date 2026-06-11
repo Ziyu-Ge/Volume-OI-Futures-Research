@@ -37,7 +37,7 @@ factor_name_by_id = {
     "45": "uptrend_push_failure",
     "46": "uptrend_oi_unwind_divergence",
     "47": "downtrend_crowded_exhaustion",
-    "51": "price_volume_up_oi_down_short_5d",
+    "51": "price_volume_up_oi_down",
 }
 
 factor_id = os.environ.get("FACTOR_ID", "42")
@@ -46,16 +46,6 @@ factor_name = os.environ.get(
     factor_name_by_id.get(factor_id, "price_up_oi_down")
 )
 
-reduce_days_by_factor_id = {
-    "51": 5,
-}
-
-reduce_days = int(
-    os.environ.get(
-        "REDUCE_DAYS",
-        reduce_days_by_factor_id.get(factor_id, 3)
-    )
-)
 annual_days = 252
 plot_dpi = 300
 figsize = (12, 6)
@@ -112,28 +102,28 @@ daily["daily_return"] = daily["close"].pct_change()
 # 原始策略：一直满仓做多
 daily["base_position"] = 1.0
 
-# 信号减仓策略：
-# 平时仓位 = 1
-# 一旦检测到信号，从下一天开始连续 reduce_days 天减仓
+# 因子仓位策略：
+# 仓位完全由因子每日表中的 position/position_scale 决定。
 #
 # 重点：
-# 信号是今天收盘后才知道的，
-# 所以要 shift(1)，不能用今天的信号交易今天。
+# 因子仓位是今天收盘后才知道的，
+# 所以要 shift(1)，不能用今天收盘后的仓位交易今天。
 
-daily["reduce_signal"] = (
-    daily["signal"]
+if "position" in daily.columns:
+    factor_position_column = "position"
+elif "position_scale" in daily.columns:
+    factor_position_column = "position_scale"
+else:
+    raise ValueError(
+        "factor daily table must contain 'position' or 'position_scale'"
+    )
+
+daily["factor_position_source"] = factor_position_column
+daily["strategy_position"] = (
+    daily[factor_position_column]
     .shift(1)
-    .rolling(window=reduce_days, min_periods=1)
-    .max()
-    .fillna(0)
+    .fillna(1.0)
 )
-
-daily["strategy_position"] = 1.0
-
-daily.loc[
-    daily["reduce_signal"] == 1,
-    "strategy_position"
-] = daily["position_scale"].min()
 
 
 # =========================
@@ -227,7 +217,7 @@ summary = pd.DataFrame([
         "signal_ratio": signal_ratio,
     },
     {
-        "strategy": "long_only_reduce_position",
+        "strategy": "factor_position",
         "total_return": strategy_total_return,
         "annual_return": strategy_annual_return,
         "max_drawdown": strategy_max_drawdown,
@@ -265,10 +255,10 @@ plt.plot(
 plt.plot(
     daily["date"],
     daily["strategy_nav"],
-    label=f"Reduce Position for {reduce_days} Days After Signal"
+    label="Strategy: Factor Position"
 )
 
-plt.title(f"{symbol} Long Only Backtest NAV")
+plt.title(f"{symbol} Factor Position Backtest NAV")
 plt.xlabel("Date")
 plt.ylabel("NAV")
 plt.legend()
@@ -314,11 +304,12 @@ plt.close()
 # 11. 打印结果
 # =========================
 
-print("长期做多 + 信号减仓回测完成。")
+print("长期做多基准 + 因子仓位回测完成。")
 print(f"每日回测结果保存为：{backtest_output_path}")
 print(f"回测汇总结果保存为：{summary_output_path}")
 print(f"净值图保存为：{nav_figure_path}")
 print(f"回撤图保存为：{drawdown_figure_path}")
+print(f"实际仓位来源：{factor_position_column}")
 
 print("\n回测结果：")
 print(summary)

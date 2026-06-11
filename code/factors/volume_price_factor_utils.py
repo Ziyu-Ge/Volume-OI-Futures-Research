@@ -284,6 +284,7 @@ def build_signal_table(daily, segments, factor_id, factor_name):
         "signal_date",
         "signal_close",
         "factor_value",
+        "position",
         "position_scale",
         "is_reversal_window",
         "is_effective_signal",
@@ -356,6 +357,7 @@ def build_signal_table(daily, segments, factor_id, factor_name):
             "signal_date": row["date"],
             "signal_close": row["close"],
             "factor_value": row["factor_value"],
+            "position": row["position"],
             "position_scale": row["position_scale"],
             "is_reversal_window": row["is_reversal_window"],
             "is_effective_signal": row["is_effective_signal"],
@@ -520,8 +522,11 @@ def save_factor_outputs(
             == 1
         )
 
-    daily["position_scale"] = 1.0
-    daily.loc[position_mask, "position_scale"] = position_scale_on_signal
+    daily["position"] = 1.0
+    daily.loc[position_mask, "position"] = position_scale_on_signal
+
+    # Backward-compatible alias for older backtest/output code.
+    daily["position_scale"] = daily["position"]
 
     effective_mask = (
         (daily["signal"] == 1) &
@@ -592,6 +597,7 @@ def save_factor_outputs(
 
     for col in base_columns + feature_columns + [
         "signal",
+        "position",
         "position_scale",
         "is_effective_signal",
     ]:
