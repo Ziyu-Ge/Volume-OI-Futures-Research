@@ -1,8 +1,15 @@
 import os
+import sys
 
 project_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
+code_dir = os.path.join(project_root, "code")
+
+if code_dir not in sys.path:
+    sys.path.insert(0, code_dir)
+
+from config import SYMBOL
 
 os.environ.setdefault(
     "MPLCONFIGDIR",
@@ -28,7 +35,7 @@ import matplotlib.pyplot as plt
 # 参数设置
 # =========================
 
-symbol = os.environ.get("SYMBOL", "LC")
+symbol = os.environ.get("SYMBOL", SYMBOL)
 factor_id_filter = os.environ.get("FACTOR_ID", "ALL")
 factor_name_filter = os.environ.get("FACTOR_NAME")
 

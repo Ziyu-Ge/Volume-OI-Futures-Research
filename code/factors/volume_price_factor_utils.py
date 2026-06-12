@@ -1,8 +1,16 @@
 import os
+import re
+import sys
 
 project_root = os.path.dirname(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
+code_dir = os.path.join(project_root, "code")
+
+if code_dir not in sys.path:
+    sys.path.insert(0, code_dir)
+
+from config import SYMBOL
 
 os.environ.setdefault(
     "MPLCONFIGDIR",
@@ -23,6 +31,15 @@ import matplotlib.pyplot as plt
 
 MAD_SCALE = 1.4826
 MAD_EPSILON = 1e-12
+
+
+def parse_factor_script_metadata(file_path):
+    stem = os.path.splitext(os.path.basename(file_path))[0]
+    match = re.match(r"^(\d+)_?(.+)$", stem)
+    if match is None:
+        raise ValueError(f"factor script filename must start with an id: {stem}")
+
+    return match.group(1), match.group(2)
 
 
 def load_daily(symbol):
@@ -447,6 +464,7 @@ def save_factor_outputs(
         signal_points["date"],
         signal_points["close"],
         s=22,
+        color="red",
         label="signal",
     )
     plt.title(f"{symbol} Factor {factor_id}: {factor_name}")

@@ -3,16 +3,28 @@ import os
 import numpy as np
 import pandas as pd
 
+from config import SYMBOL
+
+
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 # =========================
 # 参数设置
 # =========================
 
-symbol = "LC"
-data_path = f"../data/{symbol}.csv"
-daily_output_path = f"../results/tables/daily/{symbol}_daily.csv"
+symbol = SYMBOL
+data_path = os.path.join(project_root, "data", f"{symbol}.csv")
+daily_output_path = os.path.join(
+    project_root,
+    "results",
+    "tables",
+    "daily",
+    f"{symbol}_daily.csv",
+)
 
-excluded_dates = pd.to_datetime(["2023-12-08", "2025-08-11", "2026-01-12"])
+## LC
+# excluded_dates = pd.to_datetime(["2023-12-08", "2025-08-11", "2026-01-12"])
 
 
 # =========================
@@ -44,7 +56,7 @@ daily = (
 )
 
 daily["date"] = pd.to_datetime(daily["date"])
-daily = daily[~daily["date"].isin(excluded_dates)].reset_index(drop=True)
+# daily = daily[~daily["date"].isin(excluded_dates)].reset_index(drop=True)
 
 
 # =========================

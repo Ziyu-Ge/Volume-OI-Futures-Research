@@ -1,6 +1,8 @@
 from volume_price_factor_utils import (
+    SYMBOL,
     load_daily,
     mad_score,
+    parse_factor_script_metadata,
     save_factor_outputs,
 )
 
@@ -9,10 +11,9 @@ from volume_price_factor_utils import (
 # 参数设置
 # =========================
 
-symbol = "LC"
+symbol = SYMBOL
 
-factor_id = "31"
-factor_name = "price_up_speculation_up"
+factor_id, factor_name = parse_factor_script_metadata(__file__)
 
 # 价格均线多头排列窗口。
 # ma5 > ma10 > ma20 表示短期价格均线高于中期，中期高于长期；
