@@ -1,1 +1,1 @@
-SYMBOL = "JD"
+SYMBOL = "PL"
