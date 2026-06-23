@@ -512,7 +512,7 @@ def setup_matplotlib():
     return plt
 
 
-def plot_nav(df, output_path=None):
+def plot_nav(df, output_path=None, symbol=None):
     output_path = (
         Path(output_path)
         if output_path is not None
@@ -538,7 +538,10 @@ def plot_nav(df, output_path=None):
         linewidth=1.2,
         alpha=0.85,
     )
-    ax.set_title("Dow Theory CTA NAV")
+    title = "Dow Theory CTA NAV"
+    if symbol:
+        title = f"{symbol.upper()} Dow Theory CTA NAV"
+    ax.set_title(title)
     ax.set_xlabel("Date")
     ax.set_ylabel("NAV")
     ax.grid(True, linestyle="--", alpha=0.3)
@@ -551,7 +554,12 @@ def plot_nav(df, output_path=None):
     return output_path
 
 
-def plot_channels(df, output_path=None, initial_position=initial_position):
+def plot_channels(
+    df,
+    output_path=None,
+    initial_position=initial_position,
+    symbol=None,
+):
     output_path = (
         Path(output_path)
         if output_path is not None
@@ -601,7 +609,10 @@ def plot_channels(df, output_path=None, initial_position=initial_position):
         color="#d62728",
         zorder=4,
     )
-    ax.set_title("Dow Theory CTA Channels")
+    title = "Dow Theory CTA Channels"
+    if symbol:
+        title = f"{symbol.upper()} Dow Theory CTA Channels"
+    ax.set_title(title)
     ax.set_xlabel("Date")
     ax.set_ylabel("Close")
     ax.grid(True, linestyle="--", alpha=0.3)
@@ -692,11 +703,12 @@ def run_dow_theory_cta(
         symbol_prefix=symbol_prefix,
     )
     save_outputs(daily, summary, output_paths)
-    plot_nav(daily, output_paths["nav"])
+    plot_nav(daily, output_paths["nav"], symbol=symbol)
     plot_channels(
         daily,
         output_paths["channels"],
         initial_position=initial_position_value,
+        symbol=symbol,
     )
 
     return daily, summary, output_paths

@@ -1,4 +1,5 @@
 import argparse
+import importlib.util
 import os
 import sys
 import tempfile
@@ -10,14 +11,8 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 CODE_ROOT = PROJECT_ROOT / "code"
-if str(CODE_ROOT) not in sys.path:
-    sys.path.insert(0, str(CODE_ROOT))
-
-from cpv_dov_strategy import (  # noqa: E402
-    ANNUAL_DAYS,
-    run_cpv_dov_strategy,
-)
-
+STRATEGY_PATH = CODE_ROOT / "factors" / "21_cpv_strategy.py"
+RUN_NAME = "21_cpv_strategy_all_symbols"
 
 ALL_SYMBOL_COLUMNS = [
     "rank",
@@ -36,7 +31,7 @@ ALL_SYMBOL_COLUMNS = [
     "num_long_days",
     "num_short_days",
     "num_flat_days",
-    "num_round_trips",
+    "num_turnovers",
     "final_nav",
     "benchmark_final_nav",
     "factor_file",
@@ -51,7 +46,7 @@ ERROR_COLUMNS = ["symbol", "data_path", "error"]
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Run the CPV + DOV intraday strategy for every symbol CSV in data/."
+        description="Run code/factors/21_cpv_strategy.py for all symbol CSVs."
     )
     parser.add_argument(
         "--data-root",
@@ -59,57 +54,45 @@ def parse_args():
         help="Folder containing symbol CSV files. Defaults to project data/.",
     )
     parser.add_argument(
-        "--output-root",
-        default=str(PROJECT_ROOT / "results" / "tables" / "cpv_dov_all_symbols"),
-        help="Folder for all-symbol CPV DOV output tables.",
-    )
-    parser.add_argument(
-        "--figure-root",
-        default=str(PROJECT_ROOT / "results" / "figures" / "cpv_dov_all_symbols"),
-        help="Folder for all-symbol CPV DOV NAV figures.",
+        "--run-root",
+        default=str(PROJECT_ROOT / "results" / "chapter2_runs" / RUN_NAME),
+        help="Root folder for all outputs from this batch run.",
     )
     parser.add_argument(
         "--symbols",
         default=None,
-        help="Optional comma-separated symbols. Defaults to all CSV files in data-root.",
+        help="Optional comma-separated symbols. Defaults to every CSV in data-root.",
     )
     parser.add_argument(
         "--min-minutes",
         type=int,
         default=30,
-        help="Minimum valid minute deltas required for one daily PV value.",
-    )
-    parser.add_argument(
-        "--dov-mean-window",
-        type=int,
-        default=30,
-        help="Lookback days for the DOV_mean reversal threshold.",
-    )
-    parser.add_argument(
-        "--dov-mean-quantile",
-        type=float,
-        default=0.85,
-        help="Rolling quantile for the DOV_mean reversal threshold.",
-    )
-    parser.add_argument(
-        "--dov-std-window",
-        type=int,
-        default=50,
-        help="Lookback days for the DOV_std reversal threshold.",
-    )
-    parser.add_argument(
-        "--dov-std-quantile",
-        type=float,
-        default=0.80,
-        help="Rolling quantile for the DOV_std reversal threshold.",
+        help="Minimum valid minute deltas required for one daily CPV value.",
     )
     parser.add_argument(
         "--cost-rate",
         type=float,
         default=0.0,
-        help="Trading cost charged for one unit of one-way turnover.",
+        help="Trading cost charged for one unit of position change.",
     )
     return parser.parse_args()
+
+
+def load_strategy_module():
+    if str(CODE_ROOT) not in sys.path:
+        sys.path.insert(0, str(CODE_ROOT))
+
+    spec = importlib.util.spec_from_file_location(
+        "cpv_strategy_21",
+        STRATEGY_PATH,
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load strategy module from {STRATEGY_PATH}")
+
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def discover_symbol_paths(data_root, symbols=None):
@@ -125,37 +108,31 @@ def discover_symbol_paths(data_root, symbols=None):
     return [
         (path.stem.upper(), path)
         for path in sorted(data_root.glob("*.csv"))
+        if not path.name.startswith(".")
     ]
 
 
-def annualize_return(final_nav, num_days):
+def annualize_return(final_nav, num_days, annual_days):
     if pd.notna(final_nav) and final_nav > 0 and num_days > 0:
-        return final_nav ** (ANNUAL_DAYS / num_days) - 1
+        return final_nav ** (annual_days / num_days) - 1
     return np.nan
 
 
 def run_one_symbol(
+    strategy_module,
     symbol,
     data_path,
     output_root,
     figure_root,
     min_minutes,
-    dov_mean_window,
-    dov_mean_quantile,
-    dov_std_window,
-    dov_std_quantile,
     cost_rate,
 ):
-    _, backtest, summary, output_paths = run_cpv_dov_strategy(
+    _, backtest, summary, output_paths = strategy_module.run_cpv_strategy(
         symbol=symbol,
         data_path=data_path,
         output_root=output_root,
         figure_root=figure_root,
         min_minutes=min_minutes,
-        dov_mean_window=dov_mean_window,
-        dov_mean_quantile=dov_mean_quantile,
-        dov_std_window=dov_std_window,
-        dov_std_quantile=dov_std_quantile,
         cost_rate=cost_rate,
     )
 
@@ -174,6 +151,7 @@ def run_one_symbol(
     benchmark_annual_return = annualize_return(
         benchmark_final_nav,
         num_backtest_days,
+        strategy_module.ANNUAL_DAYS,
     )
 
     record["rank"] = np.nan
@@ -205,30 +183,30 @@ def build_all_symbol_summary(records):
 
 
 def format_date_columns(df):
-    out = df.copy()
+    output = df.copy()
     for column in ["start_date", "end_date"]:
-        out[column] = pd.to_datetime(
-            out[column],
+        output[column] = pd.to_datetime(
+            output[column],
             errors="coerce",
         ).dt.strftime("%Y-%m-%d")
-    return out
+    return output
 
 
-def save_all_symbol_summary(summary, output_root):
-    output_root = Path(output_root)
-    output_root.mkdir(parents=True, exist_ok=True)
-    output_path = output_root / "all_symbols_summary.csv"
+def save_all_symbol_summary(summary, summary_root):
+    summary_root = Path(summary_root)
+    summary_root.mkdir(parents=True, exist_ok=True)
+    output_path = summary_root / "all_symbols_21_cpv_strategy_summary.csv"
     format_date_columns(summary).to_csv(output_path, index=False)
     return output_path
 
 
-def save_errors(errors, output_root):
+def save_errors(errors, summary_root):
     if not errors:
         return None
 
-    output_root = Path(output_root)
-    output_root.mkdir(parents=True, exist_ok=True)
-    output_path = output_root / "all_symbols_errors.csv"
+    summary_root = Path(summary_root)
+    summary_root.mkdir(parents=True, exist_ok=True)
+    output_path = summary_root / "all_symbols_21_cpv_strategy_errors.csv"
     pd.DataFrame(errors, columns=ERROR_COLUMNS).to_csv(output_path, index=False)
     return output_path
 
@@ -246,42 +224,72 @@ def setup_matplotlib():
     return plt
 
 
-def plot_annual_return_comparison(summary, figure_root):
-    figure_root = Path(figure_root)
-    figure_root.mkdir(parents=True, exist_ok=True)
-    output_path = figure_root / "all_symbols_annual_return.png"
+def plot_summary(summary, figure_summary_root):
+    figure_summary_root = Path(figure_summary_root)
+    figure_summary_root.mkdir(parents=True, exist_ok=True)
+    output_path = figure_summary_root / "all_symbols_21_cpv_strategy_summary.png"
 
     plt = setup_matplotlib()
     plot_df = summary.sort_values("annual_return", ascending=True).copy()
     y_pos = np.arange(len(plot_df))
-    bar_height = 0.38
-    figure_height = max(8, len(plot_df) * 0.32 + 2)
+    figure_height = max(9, len(plot_df) * 0.34 + 2)
 
-    fig, ax = plt.subplots(figsize=(13, figure_height))
-    ax.barh(
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(18, figure_height),
+        sharey=True,
+        gridspec_kw={"width_ratios": [1.4, 1.0, 1.0]},
+    )
+
+    bar_height = 0.36
+    axes[0].barh(
         y_pos - bar_height / 2,
         plot_df["benchmark_annual_return"] * 100,
         height=bar_height,
         label="Benchmark",
-        color="#8c8c8c",
+        color="#8a8f98",
         alpha=0.8,
     )
-    ax.barh(
+    axes[0].barh(
         y_pos + bar_height / 2,
         plot_df["annual_return"] * 100,
         height=bar_height,
-        label="CPV DOV Strategy",
-        color="#2ca02c",
+        label="CPV Strategy",
+        color="#2f7f68",
+        alpha=0.95,
+    )
+    axes[0].set_title("Annual Return")
+    axes[0].set_xlabel("%")
+    axes[0].legend(loc="lower right")
+
+    axes[1].barh(
+        y_pos,
+        plot_df["sharpe_ratio"],
+        color="#496b9c",
         alpha=0.9,
     )
-    ax.axvline(0, color="#333333", linewidth=0.8)
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(plot_df["symbol"])
-    ax.set_xlabel("Annual Return (%)")
-    ax.set_title("CPV DOV Strategy Annual Return by Symbol")
-    ax.grid(True, axis="x", linestyle="--", alpha=0.3)
-    ax.legend(loc="lower right")
-    fig.tight_layout()
+    axes[1].set_title("Sharpe Ratio")
+    axes[1].set_xlabel("Ratio")
+
+    axes[2].barh(
+        y_pos,
+        plot_df["max_drawdown"] * 100,
+        color="#b45c4d",
+        alpha=0.9,
+    )
+    axes[2].set_title("Max Drawdown")
+    axes[2].set_xlabel("%")
+
+    for ax in axes:
+        ax.axvline(0, color="#30343b", linewidth=0.8)
+        ax.grid(True, axis="x", linestyle="--", alpha=0.25)
+        ax.set_yticks(y_pos)
+
+    axes[0].set_yticklabels(plot_df["symbol"])
+    axes[0].set_ylabel("Symbol")
+    fig.suptitle("21 CPV Strategy Summary by Symbol", fontsize=16, y=0.995)
+    fig.tight_layout(rect=[0, 0, 1, 0.985])
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
 
@@ -291,13 +299,18 @@ def plot_annual_return_comparison(summary, figure_root):
 def main():
     args = parse_args()
     data_root = Path(args.data_root)
-    output_root = Path(args.output_root)
-    figure_root = Path(args.figure_root)
-    symbol_paths = discover_symbol_paths(data_root, args.symbols)
+    run_root = Path(args.run_root)
+    table_root = run_root / "tables"
+    figure_root = run_root / "figures"
+    summary_root = table_root / "summary"
+    figure_backtest_root = figure_root / "backtest"
+    figure_summary_root = figure_root / "summary"
 
+    symbol_paths = discover_symbol_paths(data_root, args.symbols)
     if not symbol_paths:
         raise ValueError(f"No CSV files found in {data_root}")
 
+    strategy_module = load_strategy_module()
     records = []
     errors = []
 
@@ -308,15 +321,12 @@ def main():
                 raise FileNotFoundError(data_path)
 
             record = run_one_symbol(
+                strategy_module=strategy_module,
                 symbol=symbol,
                 data_path=data_path,
-                output_root=output_root,
-                figure_root=figure_root,
+                output_root=table_root,
+                figure_root=figure_backtest_root,
                 min_minutes=args.min_minutes,
-                dov_mean_window=args.dov_mean_window,
-                dov_mean_quantile=args.dov_mean_quantile,
-                dov_std_window=args.dov_std_window,
-                dov_std_quantile=args.dov_std_quantile,
                 cost_rate=args.cost_rate,
             )
             records.append(record)
@@ -334,20 +344,19 @@ def main():
             })
             print(f"  failed: {exc}")
 
+    error_path = save_errors(errors, summary_root)
     if not records:
-        error_path = save_errors(errors, output_root)
         raise RuntimeError(f"No symbols completed successfully. errors={error_path}")
 
     summary = build_all_symbol_summary(records)
-    summary_path = save_all_symbol_summary(summary, output_root)
-    figure_path = plot_annual_return_comparison(summary, figure_root)
-    error_path = save_errors(errors, output_root)
+    summary_path = save_all_symbol_summary(summary, summary_root)
+    figure_path = plot_summary(summary, figure_summary_root)
 
-    print("All-symbol CPV DOV strategy run complete.")
+    print("All-symbol 21 CPV strategy run complete.")
     print(f"symbols completed: {len(summary)}")
     print(f"symbols failed: {len(errors)}")
     print(f"summary file: {summary_path}")
-    print(f"comparison figure: {figure_path}")
+    print(f"summary figure: {figure_path}")
     if error_path is not None:
         print(f"error file: {error_path}")
     print(
