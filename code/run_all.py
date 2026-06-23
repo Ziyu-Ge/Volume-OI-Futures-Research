@@ -3,21 +3,63 @@ import os
 import re
 import subprocess
 import sys
+import textwrap
 from pathlib import Path
-
-from config import SYMBOL
 
 
 CODE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CODE_DIR.parent
+DATA_DIR = PROJECT_ROOT / "data"
 FACTOR_DIR = CODE_DIR / "factors"
 BACKTEST_DIR = CODE_DIR / "backtest"
 
 FACTOR_UTILS_FILENAME = "volume_price_factor_utils.py"
+PREPARE_SCRIPT = CODE_DIR / "00_prepare_data.py"
+EDA_SCRIPT = CODE_DIR / "eda.py"
 BACKTEST_SCRIPTS = [
-    ("multi", BACKTEST_DIR / "backtest_multi.py"),
     ("sum", BACKTEST_DIR / "backtest_sum.py"),
+    ("multi", BACKTEST_DIR / "backtest_multi.py"),
 ]
+
+RUN_SCRIPT_CODE = textwrap.dedent(
+    """
+    import importlib.util
+    import os
+    import runpy
+    import sys
+
+    project_root, code_dir, script_path, symbol = sys.argv[1:5]
+
+    os.chdir(project_root)
+    os.environ["SYMBOL"] = symbol
+
+    for path in [os.path.dirname(script_path), code_dir, project_root]:
+        if path and path not in sys.path:
+            sys.path.insert(0, path)
+
+    config_path = os.path.join(code_dir, "config.py")
+    spec = importlib.util.spec_from_file_location("config", config_path)
+    config = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(config)
+    config.SYMBOL = symbol
+    sys.modules["config"] = config
+
+    runpy.run_path(script_path, run_name="__main__")
+    """
+)
+
+
+def parse_csv_filter(raw_value):
+    if raw_value is None:
+        return None
+
+    values = [
+        item.strip().upper()
+        for item in raw_value.split(",")
+        if item.strip()
+    ]
+
+    return values or None
 
 
 def parse_factor_ids(raw_value):
@@ -41,6 +83,36 @@ def get_factor_id_from_script(script_path):
     return match.group(1)
 
 
+def discover_symbols(symbol_filter=None):
+    if not DATA_DIR.exists():
+        raise FileNotFoundError(f"数据目录不存在：{DATA_DIR}")
+
+    available_symbols = sorted(
+        path.stem.upper()
+        for path in DATA_DIR.glob("*.csv")
+        if path.is_file()
+    )
+    if not available_symbols:
+        raise FileNotFoundError(f"数据目录中没有 CSV 文件：{DATA_DIR}")
+
+    if symbol_filter is None:
+        return available_symbols
+
+    available_set = set(available_symbols)
+    missing_symbols = [
+        symbol
+        for symbol in symbol_filter
+        if symbol not in available_set
+    ]
+    if missing_symbols:
+        raise FileNotFoundError(
+            "以下品种在 data/ 中没有找到对应 CSV："
+            f"{','.join(missing_symbols)}"
+        )
+
+    return symbol_filter
+
+
 def discover_factor_scripts(factor_ids=None):
     scripts = []
 
@@ -62,56 +134,105 @@ def discover_factor_scripts(factor_ids=None):
     return scripts
 
 
-def build_env(factor_ids=None):
+def build_env(symbol, factor_ids=None):
     env = os.environ.copy()
-    env["SYMBOL"] = SYMBOL
+    env["SYMBOL"] = symbol
 
     if factor_ids is not None:
         env["FACTOR_ID"] = ",".join(sorted(factor_ids))
+    else:
+        env.pop("FACTOR_ID", None)
 
     return env
 
 
-def run_script(script_path, env):
+def run_script(script_path, symbol, env):
     relative_path = script_path.relative_to(PROJECT_ROOT)
-    print(f"\n========== run {relative_path} ==========", flush=True)
+    print(
+        f"\n========== [{symbol}] run {relative_path} ==========",
+        flush=True,
+    )
 
     subprocess.run(
-        [sys.executable, str(script_path)],
+        [
+            sys.executable,
+            "-c",
+            RUN_SCRIPT_CODE,
+            str(PROJECT_ROOT),
+            str(CODE_DIR),
+            str(script_path),
+            symbol,
+        ],
         cwd=PROJECT_ROOT,
         env=env,
         check=True,
     )
 
 
-def run_prepare(env):
-    run_script(CODE_DIR / "00_prepare_data.py", env)
+def run_prepare(symbol, env):
+    run_script(PREPARE_SCRIPT, symbol, env)
 
 
-def run_eda(env):
-    run_script(CODE_DIR / "eda.py", env)
+def run_eda(symbol, env):
+    if not EDA_SCRIPT.exists():
+        raise FileNotFoundError(f"EDA 脚本不存在：{EDA_SCRIPT}")
+
+    run_script(EDA_SCRIPT, symbol, env)
 
 
-def run_factors(env, factor_ids=None):
-    factor_scripts = discover_factor_scripts(factor_ids)
-
+def run_factors(symbol, env, factor_scripts):
     for factor_script in factor_scripts:
-        run_script(factor_script, env)
-
-    return factor_scripts
+        run_script(factor_script, symbol, env)
 
 
-def run_backtests(env, backtest_choice):
+def run_backtests(symbol, env, backtest_choice):
+    ran_backtest = False
+
     for backtest_name, backtest_script in BACKTEST_SCRIPTS:
         if backtest_choice != "all" and backtest_choice != backtest_name:
             continue
 
-        run_script(backtest_script, env)
+        if not backtest_script.exists():
+            if backtest_choice == backtest_name:
+                raise FileNotFoundError(f"回测脚本不存在：{backtest_script}")
+            continue
+
+        run_script(backtest_script, symbol, env)
+        ran_backtest = True
+
+    if not ran_backtest:
+        raise FileNotFoundError("没有找到可运行的回测脚本。")
+
+
+def run_symbol(symbol, args, factor_scripts, factor_ids):
+    env = build_env(symbol, factor_ids)
+
+    if not args.skip_prepare:
+        run_prepare(symbol, env)
+
+    if args.run_eda:
+        run_eda(symbol, env)
+
+    if not args.skip_factors:
+        run_factors(symbol, env, factor_scripts)
+
+    if not args.skip_backtest:
+        run_backtests(symbol, env, args.backtest)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="依次运行数据准备、EDA、全部因子和回测。"
+        description="批量运行全部或指定品种的全部因子和回测。"
+    )
+    parser.add_argument(
+        "--symbols",
+        "--symbol",
+        dest="symbols",
+        help="只运行指定品种，多个品种用逗号分隔，例如：PL,CU。默认运行 data/ 下全部品种。",
+    )
+    parser.add_argument(
+        "--factor-id",
+        help="只运行指定因子编号，多个编号用逗号分隔，例如：11,12,14。默认运行全部因子。",
     )
     parser.add_argument(
         "--skip-prepare",
@@ -124,48 +245,62 @@ def main():
         help="跳过因子计算。",
     )
     parser.add_argument(
-        "--skip-eda",
-        action="store_true",
-        help="跳过 EDA 图表生成。",
-    )
-    parser.add_argument(
         "--skip-backtest",
         action="store_true",
         help="跳过回测。",
     )
     parser.add_argument(
-        "--factor-id",
-        help="只运行指定因子编号，多个编号用逗号分隔，例如：11,12,44。",
+        "--run-eda",
+        action="store_true",
+        help="额外运行 EDA 脚本。默认不运行。",
     )
     parser.add_argument(
         "--backtest",
-        choices=["all", "multi", "sum"],
+        choices=["all", "sum", "multi"],
         default="all",
-        help="选择运行哪类回测，默认 all。",
+        help="选择运行哪类回测，默认 all；不存在的回测脚本会在 all 模式下自动跳过。",
+    )
+    parser.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="单个品种失败后继续运行后续品种，并在最后汇总失败列表。",
     )
 
     args = parser.parse_args()
+    symbol_filter = parse_csv_filter(args.symbols)
     factor_ids = parse_factor_ids(args.factor_id)
-    env = build_env(factor_ids)
+    symbols = discover_symbols(symbol_filter)
+    factor_scripts = discover_factor_scripts(factor_ids)
+    failures = []
 
-    print(f"SYMBOL = {SYMBOL}", flush=True)
+    print(f"本次运行品种数量：{len(symbols)}", flush=True)
+    print(f"本次运行因子数量：{len(factor_scripts)}", flush=True)
+    print(f"品种列表：{','.join(symbols)}", flush=True)
+    print(
+        "因子列表："
+        + ",".join(script.stem for script in factor_scripts),
+        flush=True,
+    )
 
-    if not args.skip_prepare:
-        run_prepare(env)
+    for symbol in symbols:
+        print(f"\n###### 开始运行品种：{symbol} ######", flush=True)
+        try:
+            run_symbol(symbol, args, factor_scripts, factor_ids)
+        except Exception as exc:
+            if not args.keep_going:
+                raise
 
-    if not args.skip_eda:
-        run_eda(env)
-
-    factor_scripts = []
-    if not args.skip_factors:
-        factor_scripts = run_factors(env, factor_ids)
-
-    if not args.skip_backtest:
-        run_backtests(env, args.backtest)
+            failures.append((symbol, exc))
+            print(f"\n!!!!!! 品种 {symbol} 运行失败：{exc} !!!!!!", flush=True)
 
     print("\n全部任务完成。", flush=True)
-    if factor_scripts:
-        print(f"本次运行因子数量：{len(factor_scripts)}", flush=True)
+    print(f"完成品种数量：{len(symbols) - len(failures)}", flush=True)
+
+    if failures:
+        print(f"失败品种数量：{len(failures)}", flush=True)
+        for symbol, exc in failures:
+            print(f"- {symbol}: {exc}", flush=True)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,12 @@ backtest_dir = os.path.join(project_root, "results", "tables", "backtest")
 figure_dir = os.path.join(project_root, "results", "figures", "backtest")
 daily_input_path = os.path.join(daily_dir, f"{symbol}_daily.csv")
 
+# These columns are already aligned to the trading day by factor scripts.
+# For example, factors 11/12/13/14 use this for next-day open-vs-mean trades.
+direct_trade_position_columns = {
+    "trade_open_mean_position",
+}
+
 
 def parse_filter(raw_value):
     if raw_value is None:
@@ -106,6 +112,10 @@ def discover_factor_files():
 
 
 def get_factor_position_column(daily, factor_path):
+    for column in direct_trade_position_columns:
+        if column in daily.columns:
+            return column
+
     if "position" in daily.columns:
         return "position"
     if "position_scale" in daily.columns:
@@ -114,6 +124,10 @@ def get_factor_position_column(daily, factor_path):
     raise ValueError(
         f"{factor_path} must contain 'position' or 'position_scale'"
     )
+
+
+def should_shift_position_column(position_column):
+    return position_column not in direct_trade_position_columns
 
 
 def ensure_open_price(daily):
@@ -190,20 +204,28 @@ def run_backtest(factor_info):
     daily["base_position"] = 1.0
 
     # 因子仓位策略：
-    # 仓位完全由因子每日表中的 position/position_scale 决定。
-    #
-    # 重点：
-    # 因子仓位是今天收盘后才知道的，
-    # 所以要 shift(1)，不能用今天收盘后的仓位交易今天。
+    # 默认仓位由因子每日表中的 position/position_scale 决定。
+    # 这些字段在信号确认日生成，需要 shift(1) 后交易下一天。
+    # 对于 trade_open_mean_position 这类字段，它已经表示交易当天仓位，
+    # 因此不再二次 shift。
 
     factor_position_column = get_factor_position_column(daily, factor_path)
+    shift_position = should_shift_position_column(factor_position_column)
 
     daily["factor_position_source"] = factor_position_column
-    daily["strategy_position"] = (
-        daily[factor_position_column]
-        .shift(1)
-        .fillna(1.0)
-    )
+    daily["factor_position_shifted"] = shift_position
+
+    if shift_position:
+        daily["strategy_position"] = (
+            daily[factor_position_column]
+            .shift(1)
+            .fillna(1.0)
+        )
+    else:
+        daily["strategy_position"] = (
+            daily[factor_position_column]
+            .fillna(1.0)
+        )
 
     # =========================
     # 4. 计算策略每日单利收益
