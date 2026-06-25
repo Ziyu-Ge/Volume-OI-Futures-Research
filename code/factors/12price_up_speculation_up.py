@@ -21,8 +21,8 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 # ma5 > ma10 > ma20 表示短期价格均线高于中期，中期高于长期；
 # 这是原因子里判断“价格已经偏强”的第一层条件。
 ma_short_window = 5
-ma_mid_window = 10
-ma_long_window = 20
+ma_mid_window = 30
+ma_long_window = 60
 
 # 持仓量均线窗口。
 # open_interest_ma_5 > open_interest_ma_10 表示短期持仓量高于中期持仓量；

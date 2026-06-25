@@ -21,8 +21,8 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 # 价格均线多头排列窗口。
 # ma5 > ma10 > ma20 表示短期价格均线高于中期，中期高于长期。
 ma_short_window = 5
-ma_mid_window = 10
-ma_long_window = 20
+ma_mid_window = 30
+ma_long_window = 60
 
 # oi_window 表示持仓量历史参照窗口。
 # 持仓量先取 log，再和过去 oi_window 天的 log(open_interest) 比较；

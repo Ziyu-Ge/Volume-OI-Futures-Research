@@ -19,9 +19,9 @@ symbol = SYMBOL
 factor_id, factor_name = parse_factor_script_metadata(__file__)
 
 # 价格相对过去 20 个交易日的历史分位阈值。
-# close_rank_20 >= 0.75 表示今天收盘价高于过去窗口中至少 75% 的收盘价，
+# close_rank_20 >= 0.9 表示今天收盘价高于过去窗口中至少 90% 的收盘价，
 # 用来确认价格已经处在近期偏强区域。
-price_rank_threshold = 0.75 
+price_rank_threshold = 0.9
 
 # 5 日持仓量对数变化阈值。
 # oi_ret_5 > 0.05 表示最近 5 日持仓量明显增加，

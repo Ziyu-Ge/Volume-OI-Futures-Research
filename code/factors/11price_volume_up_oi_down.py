@@ -23,14 +23,14 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 # close_rank_20 >= 0.70 表示价格处在过去 20 日的偏高位置；
 # oi_change_5_rate_mad_abs_score >= 1.0 表示 5 日持仓变化率明显偏离常态；
 # volume_mad_score >= 1.0 表示成交量相对过去窗口明显放大。
-price_rank_threshold = 0.70
+price_rank_threshold = 0.90
 oi_change_mad_threshold = 1.0
 volume_mad_threshold = 1.0
 
 # 价格历史分位窗口。
 # close_rank_20 用于短期价格强弱判断，close_rank_60 主要进入输出特征和图形，
 # min_rank_days 控制早期样本不足时不计算短窗口分位。
-price_rank_window = 20
+price_rank_window = 30
 price_rank_long_window = 60
 min_rank_days = 8
 min_rank_long_days = 20
