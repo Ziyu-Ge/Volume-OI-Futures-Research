@@ -23,7 +23,7 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 ma_short_window = 5
 ma_mid_window = 10
 ma_long_window = 20
-ma_gap_threshold = 0.003
+ma_gap_threshold = 0.01
 
 # oi_window 表示持仓量历史参照窗口。
 # 持仓量先取 log，再和过去 oi_window 天的 log(open_interest) 比较；
