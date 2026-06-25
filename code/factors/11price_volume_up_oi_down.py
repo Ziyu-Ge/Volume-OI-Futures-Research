@@ -50,6 +50,14 @@ min_mad_days = 5
 signal_position_scale = 1
 signal_holding_days = 1
 
+# 均线排列和乖离率过滤参数。
+# ma5 > ma10 > ma20 用于确认短中期多头排列；
+# ma_gap_threshold 要求 ma5/ma10、ma10/ma20 之间至少拉开一定距离。
+ma_short_window = 5
+ma_mid_window = 10
+ma_long_window = 20
+ma_gap_threshold = 0.003
+
 
 # =========================
 # 1. 读取日频数据
@@ -144,13 +152,47 @@ daily["price_volume_oi_score"] = (
 )
 
 # =========================
+# 5.1 计算均线排列和乖离率过滤
+# =========================
+# ma_bull_stack_filter 要求价格均线形成 ma5 > ma10 > ma20 的多头排列，
+# 并且 ma5/ma10、ma10/ma20 的乖离率均超过 ma_gap_threshold。
+
+daily["ma5"] = (
+    daily["close"]
+    .rolling(ma_short_window, min_periods=ma_short_window)
+    .mean()
+)
+daily["ma10"] = (
+    daily["close"]
+    .rolling(ma_mid_window, min_periods=ma_mid_window)
+    .mean()
+)
+daily["ma20"] = (
+    daily["close"]
+    .rolling(ma_long_window, min_periods=ma_long_window)
+    .mean()
+)
+
+daily["ma5_ma10_bias"] = daily["ma5"] / daily["ma10"] - 1
+daily["ma10_ma20_bias"] = daily["ma10"] / daily["ma20"] - 1
+daily["close_ma20_bias"] = daily["close"] / daily["ma20"] - 1
+
+daily["ma_bull_stack_filter"] = (
+    (daily["ma5"] > daily["ma10"]) &
+    (daily["ma10"] > daily["ma20"]) &
+    (daily["ma5_ma10_bias"] >= ma_gap_threshold) &
+    (daily["ma10_ma20_bias"] >= ma_gap_threshold)
+)
+
+# =========================
 # 6. 生成价格上涨、成交放大、持仓变化异常信号
 # =========================
-# 信号要求四类条件同时成立：
+# 信号要求五类条件同时成立：
 # 1. 收盘价处在近期高分位；
 # 2. 过去 5 日价格上涨；
 # 3. 5 日持仓变化率相对历史窗口明显异常；
 # 4. 成交量相对历史窗口明显放大。
+# 5. 均线呈 ma5 > ma10 > ma20 多头排列，且短中期均线乖离率达标。
 # 虽然 factor_name 保留了 oi_down 命名，但当前代码实际使用绝对值条件，
 # 因此这里捕捉的是“持仓变化异常”，不是单纯的持仓下降。
 
@@ -164,6 +206,8 @@ daily.loc[
         daily["oi_change_5_rate_mad_abs_score"] >= oi_change_mad_threshold
     ) & (
         daily["volume_mad_score"] >= volume_mad_threshold
+    ) & (
+        daily["ma_bull_stack_filter"]
     ),
     "price_volume_up_oi_down_signal",
 ] = 1
@@ -259,6 +303,13 @@ feature_columns = [
     "log_volume_mad_past",
     "volume_mad_score",
     "price_volume_oi_score",
+    "ma5",
+    "ma10",
+    "ma20",
+    "ma5_ma10_bias",
+    "ma10_ma20_bias",
+    "close_ma20_bias",
+    "ma_bull_stack_filter",
     "day_mean_price",
     "next_day_open",
     "next_day_open_vs_day_mean",
@@ -283,6 +334,8 @@ save_factor_outputs(
         "ret_5",
         "oi_change_5_rate_mad_abs_score",
         "volume_mad_score",
+        "ma5_ma10_bias",
+        "ma10_ma20_bias",
     ],
     signal_holding_days=signal_holding_days,
 )

@@ -21,8 +21,9 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 # 价格均线多头排列窗口。
 # ma5 > ma10 > ma20 表示短期价格均线高于中期，中期高于长期。
 ma_short_window = 5
-ma_mid_window = 30
-ma_long_window = 60
+ma_mid_window = 10
+ma_long_window = 20
+ma_gap_threshold = 0.003
 
 # oi_window 表示持仓量历史参照窗口。
 # 持仓量先取 log，再和过去 oi_window 天的 log(open_interest) 比较；
@@ -89,6 +90,17 @@ daily["is_ma_bullish"] = (
     (daily["price_ma_10"] > daily["price_ma_20"])
 ).astype(int)
 
+daily["ma5_ma10_bias"] = daily["price_ma_5"] / daily["price_ma_10"] - 1
+daily["ma10_ma20_bias"] = daily["price_ma_10"] / daily["price_ma_20"] - 1
+daily["close_ma20_bias"] = daily["close"] / daily["price_ma_20"] - 1
+
+daily["ma_bull_stack_filter"] = (
+    (daily["price_ma_5"] > daily["price_ma_10"]) &
+    (daily["price_ma_10"] > daily["price_ma_20"]) &
+    (daily["ma5_ma10_bias"] >= ma_gap_threshold) &
+    (daily["ma10_ma20_bias"] >= ma_gap_threshold)
+)
+
 
 # =========================
 # 3. 计算持仓量高位和持仓量变化
@@ -138,13 +150,13 @@ daily["oi_change_rate"] = (
 # 4. 生成因子信号
 # =========================
 # 这个因子关注价格持续走强时的持仓量从高位回落：
-# 价格 ma5 > ma10 > ma20，同时持仓量处在 10 日 80% 高位，
+# 价格 ma5 > ma10 > ma20 且乖离率达标，同时持仓量处在 10 日 80% 高位，
 # 且今天持仓量确实比上一交易日下降。
 # 直觉上，价格上涨但高位持仓开始下降，可能表示上涨过程伴随减仓、
 # 空头回补或多头获利了结，行情可能进入背离/过热阶段。
 
 daily["price_up_oi_down_signal"] = (
-    (daily["is_ma_bullish"] == 1) &
+    daily["ma_bull_stack_filter"] &
     (daily["open_interest_rank_10"] >= oi_rank_threshold) &
     (daily["delta_log_open_interest"] < 0)
 ).astype(int)
@@ -233,6 +245,10 @@ feature_columns = [
     "price_ma_10",
     "price_ma_20",
     "is_ma_bullish",
+    "ma5_ma10_bias",
+    "ma10_ma20_bias",
+    "close_ma20_bias",
+    "ma_bull_stack_filter",
     "open_interest",
     "open_interest_rank_10",
     "log_open_interest",
@@ -266,6 +282,8 @@ result = save_factor_outputs(
         "price_ma_20",
         "open_interest_rank_10",
         "log_open_interest_mad_score",
+        "ma5_ma10_bias",
+        "ma10_ma20_bias",
     ],
 )
 
@@ -281,6 +299,7 @@ summary_table = result["summary_table"].copy()
 summary_table["ma_short_window"] = ma_short_window
 summary_table["ma_mid_window"] = ma_mid_window
 summary_table["ma_long_window"] = ma_long_window
+summary_table["ma_gap_threshold"] = ma_gap_threshold
 summary_table["oi_window"] = oi_window
 summary_table["oi_rank_window"] = oi_rank_window
 summary_table["oi_rank_threshold"] = oi_rank_threshold
@@ -289,6 +308,12 @@ summary_table["mad_epsilon"] = mad_epsilon
 summary_table["min_history_days"] = min_history_days
 summary_table["ma_bullish_days"] = int(daily["is_ma_bullish"].sum())
 summary_table["ma_bullish_ratio"] = daily["is_ma_bullish"].mean()
+summary_table["ma_bull_stack_filter_days"] = int(
+    daily["ma_bull_stack_filter"].sum()
+)
+summary_table["ma_bull_stack_filter_ratio"] = daily[
+    "ma_bull_stack_filter"
+].mean()
 summary_table["mean_open_interest_rank_10"] = daily[
     "open_interest_rank_10"
 ].mean()

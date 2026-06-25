@@ -44,6 +44,13 @@ close_location_threshold = 0.95
 # 公共 position 字段保留为 1.0，真实回测方向写入 trade_open_mean_position。
 signal_position_scale = 1
 
+# 均线排列和乖离率过滤参数。
+# ma5 > ma10 > ma20 用于确认短中期多头排列；
+# ma_gap_threshold 要求 ma5/ma10、ma10/ma20 之间至少拉开一定距离。
+ma_short_window = 5
+ma_mid_window = 10
+ma_long_window = 20
+ma_gap_threshold = 0.003
 
 # =========================
 # 1. 读取日频数据并补充量价特征
@@ -70,14 +77,48 @@ daily["crowded_chase_score"] = (
 )
 
 # =========================
+# 2.1 计算均线排列和乖离率过滤
+# =========================
+# ma_bull_stack_filter 要求价格均线形成 ma5 > ma10 > ma20 的多头排列，
+# 并且 ma5/ma10、ma10/ma20 的乖离率均超过 ma_gap_threshold。
+
+daily["ma5"] = (
+    daily["close"]
+    .rolling(ma_short_window, min_periods=ma_short_window)
+    .mean()
+)
+daily["ma10"] = (
+    daily["close"]
+    .rolling(ma_mid_window, min_periods=ma_mid_window)
+    .mean()
+)
+daily["ma20"] = (
+    daily["close"]
+    .rolling(ma_long_window, min_periods=ma_long_window)
+    .mean()
+)
+
+daily["ma5_ma10_bias"] = daily["ma5"] / daily["ma10"] - 1
+daily["ma10_ma20_bias"] = daily["ma10"] / daily["ma20"] - 1
+daily["close_ma20_bias"] = daily["close"] / daily["ma20"] - 1
+
+daily["ma_bull_stack_filter"] = (
+    (daily["ma5"] > daily["ma10"]) &
+    (daily["ma10"] > daily["ma20"]) &
+    (daily["ma5_ma10_bias"] >= ma_gap_threshold) &
+    (daily["ma10_ma20_bias"] >= ma_gap_threshold)
+)
+
+# =========================
 # 3. 生成上行趋势拥挤追涨信号
 # =========================
-# 信号要求五类条件同时成立：
+# 信号要求六类条件同时成立：
 # 1. 收盘价处在近期高分位；
 # 2. 过去 5 日价格上涨；
 # 3. 过去 5 日持仓量增加超过阈值；
 # 4. 成交量或振幅至少一项出现明显正向异常；
 # 5. 收盘价位置不高于 close_location_threshold。
+# 6. 均线呈 ma5 > ma10 > ma20 多头排列，且短中期均线乖离率达标。
 # 这些条件合在一起刻画“上涨后继续追入且交易变拥挤”的阶段。
 
 daily["uptrend_crowded_chase_signal"] = 0
@@ -93,6 +134,8 @@ daily.loc[
         (daily["range_mad_score"] >= range_mad_threshold)
     ) & (
         daily["close_location"] <= close_location_threshold
+    ) & (
+        daily["ma_bull_stack_filter"]
     ),
     "uptrend_crowded_chase_signal",
 ] = 1
@@ -184,6 +227,13 @@ feature_columns = [
     "range_mad_score",
     "close_location",
     "crowded_chase_score",
+    "ma5",
+    "ma10",
+    "ma20",
+    "ma5_ma10_bias",
+    "ma10_ma20_bias",
+    "close_ma20_bias",
+    "ma_bull_stack_filter",
     "day_mean_price",
     "next_day_open",
     "next_day_open_vs_day_mean",
@@ -209,5 +259,7 @@ save_factor_outputs(
         "open_interest_mad_score",
         "volume_mad_score",
         "range_mad_score",
+        "ma5_ma10_bias",
+        "ma10_ma20_bias",
     ],
 )
