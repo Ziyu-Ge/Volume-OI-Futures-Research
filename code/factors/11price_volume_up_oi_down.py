@@ -56,7 +56,7 @@ signal_holding_days = 1
 ma_short_window = 5
 ma_mid_window = 10
 ma_long_window = 20
-ma_gap_threshold = 0.01
+ma_gap_threshold = 0.02
 
 
 # =========================

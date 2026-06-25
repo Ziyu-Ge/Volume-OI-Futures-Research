@@ -64,8 +64,16 @@ CLICK_INFO_SCRIPT = """
         return;
     }
 
+    document.documentElement.style.height = '100%';
+    document.documentElement.style.margin = '0';
+    document.body.style.height = '100vh';
+    document.body.style.margin = '0';
+    document.body.style.padding = '10px 12px';
+    document.body.style.boxSizing = 'border-box';
+    document.body.style.overflow = 'hidden';
+
     var panel = document.createElement('div');
-    panel.style.margin = '8px 0 12px 0';
+    panel.style.margin = '0 0 8px 0';
     panel.style.padding = '10px 12px';
     panel.style.border = '1px solid #d1d5db';
     panel.style.borderRadius = '6px';
@@ -74,6 +82,35 @@ CLICK_INFO_SCRIPT = """
     panel.style.font = '14px Arial, sans-serif';
     panel.textContent = 'Click a signal point to show its date and factor.';
     graph.parentNode.insertBefore(panel, graph);
+
+    function resizeGraph() {
+        var bodyStyle = window.getComputedStyle(document.body);
+        var verticalPadding = (
+            parseFloat(bodyStyle.paddingTop) +
+            parseFloat(bodyStyle.paddingBottom)
+        ) || 0;
+        var horizontalPadding = (
+            parseFloat(bodyStyle.paddingLeft) +
+            parseFloat(bodyStyle.paddingRight)
+        ) || 0;
+        var panelHeight = panel.getBoundingClientRect().height;
+        var availableHeight = window.innerHeight - verticalPadding - panelHeight - 8;
+        var availableWidth = document.body.clientWidth - horizontalPadding;
+
+        availableHeight = Math.max(320, Math.floor(availableHeight));
+        availableWidth = Math.max(320, Math.floor(availableWidth));
+        graph.style.width = availableWidth + 'px';
+        graph.style.height = availableHeight + 'px';
+
+        Plotly.relayout(graph, {
+            autosize: true,
+            width: availableWidth,
+            height: availableHeight
+        });
+    }
+
+    window.addEventListener('resize', resizeGraph);
+    window.requestAnimationFrame(resizeGraph);
 
     graph.on('plotly_click', function(eventData) {
         if (!eventData || !eventData.points || eventData.points.length === 0) {
@@ -101,6 +138,7 @@ CLICK_INFO_SCRIPT = """
             '&nbsp;&nbsp; <strong>Close:</strong> ' + closeText +
             (factorValue ? '&nbsp;&nbsp; <strong>Factor value:</strong> ' + factorValue : '')
         );
+        resizeGraph();
 
         Plotly.relayout(graph, {
             annotations: [{
@@ -530,8 +568,7 @@ def plot_symbol_signals_html(symbol, frames, styles, figures_dir):
 
     fig.update_layout(
         title=f"{symbol} combined factor signals",
-        width=1500,
-        height=850,
+        autosize=True,
         template="plotly_white",
         clickmode="event+select",
         hovermode="closest",
@@ -570,6 +607,8 @@ def plot_symbol_signals_html(symbol, frames, styles, figures_dir):
             "scrollZoom": True,
         },
         post_script=CLICK_INFO_SCRIPT,
+        default_width="100%",
+        default_height="720px",
     )
 
     return html_path

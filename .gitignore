@@ -1,3 +1,13 @@
 data/
+results/
 .DS_Store
+
+# Python / tool caches
+__pycache__/
+*.py[cod]
+*$py.class
+.cache/
 .matplotlib/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
