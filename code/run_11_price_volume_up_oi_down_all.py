@@ -1,6 +1,5 @@
 import argparse
 import os
-import shutil
 import subprocess
 import sys
 import textwrap
@@ -18,7 +17,7 @@ FACTOR_SCRIPT = CODE_DIR / "factors" / "11price_volume_up_oi_down.py"
 PREPARE_SCRIPT = CODE_DIR / "00_prepare_data.py"
 BACKTEST_SCRIPT = CODE_DIR / "backtest" / "backtest_sum.py"
 DEFAULT_OUTPUT_DIR = (
-    RESULTS_DIR / "runs" / "11_price_volume_up_oi_down_all_symbols"
+    RESULTS_DIR / "11_price_volume_up_oi_down_all_symbols"
 )
 
 os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
@@ -105,10 +104,12 @@ def discover_symbols(symbol_filter=None):
     return symbol_filter
 
 
-def build_env(symbol):
+def build_env(symbol, output_dir):
     env = os.environ.copy()
     env["SYMBOL"] = symbol
     env["FACTOR_ID"] = FACTOR_ID
+    env["FACTOR_NAME"] = FACTOR_NAME
+    env["RESULTS_OUTPUT_DIR"] = str(output_dir)
     env.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
     env.setdefault("XDG_CACHE_HOME", str(PROJECT_ROOT / ".cache"))
     return env
@@ -132,92 +133,6 @@ def run_script(script_path, symbol, env):
         env=env,
         check=True,
     )
-
-
-def collect_file(source_path, destination_path):
-    if not source_path.exists():
-        return False
-
-    destination_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(source_path, destination_path)
-    return True
-
-
-def collect_symbol_outputs(symbol, output_dir):
-    filename_prefix = f"{symbol}_{FACTOR_ID}_{FACTOR_NAME}"
-    source_files = [
-        (
-            RESULTS_DIR / "tables" / "daily" / f"{symbol}_daily.csv",
-            output_dir / "tables" / "daily" / f"{symbol}_daily.csv",
-        ),
-        (
-            RESULTS_DIR / "tables" / "factors" / f"{filename_prefix}.csv",
-            output_dir / "tables" / "factors" / f"{filename_prefix}.csv",
-        ),
-        (
-            RESULTS_DIR / "tables" / "signals" / f"{filename_prefix}_signals.csv",
-            output_dir / "tables" / "signals" / f"{filename_prefix}_signals.csv",
-        ),
-        (
-            RESULTS_DIR / "tables" / "summary" / f"{filename_prefix}_summary.csv",
-            output_dir / "tables" / "summary" / f"{filename_prefix}_summary.csv",
-        ),
-        (
-            RESULTS_DIR
-            / "tables"
-            / "backtest"
-            / f"{filename_prefix}_long_only_simple_backtest.csv",
-            output_dir
-            / "tables"
-            / "backtest"
-            / f"{filename_prefix}_long_only_simple_backtest.csv",
-        ),
-        (
-            RESULTS_DIR
-            / "tables"
-            / "backtest"
-            / f"{filename_prefix}_long_only_simple_summary.csv",
-            output_dir
-            / "tables"
-            / "backtest"
-            / f"{filename_prefix}_long_only_simple_summary.csv",
-        ),
-        (
-            RESULTS_DIR
-            / "figures"
-            / f"{filename_prefix}_signal_on_price.png",
-            output_dir
-            / "figures"
-            / "factors"
-            / f"{filename_prefix}_signal_on_price.png",
-        ),
-        (
-            RESULTS_DIR
-            / "figures"
-            / f"{filename_prefix}_factor_value.png",
-            output_dir
-            / "figures"
-            / "factors"
-            / f"{filename_prefix}_factor_value.png",
-        ),
-        (
-            RESULTS_DIR
-            / "figures"
-            / "backtest"
-            / f"{filename_prefix}_simple_nav.png",
-            output_dir
-            / "figures"
-            / "backtest"
-            / f"{filename_prefix}_simple_nav.png",
-        ),
-    ]
-
-    missing_files = []
-    for source_path, destination_path in source_files:
-        if not collect_file(source_path, destination_path):
-            missing_files.append(source_path)
-
-    return missing_files
 
 
 def read_backtest_summary(symbol, output_dir):
@@ -400,7 +315,7 @@ def save_combined_summaries(symbols, output_dir):
 
 
 def run_symbol(symbol, args, output_dir):
-    env = build_env(symbol)
+    env = build_env(symbol, output_dir)
 
     if not args.collect_only:
         if not args.skip_prepare:
@@ -409,14 +324,6 @@ def run_symbol(symbol, args, output_dir):
             run_script(FACTOR_SCRIPT, symbol, env)
         if not args.skip_backtest:
             run_script(BACKTEST_SCRIPT, symbol, env)
-
-    missing_files = collect_symbol_outputs(symbol, output_dir)
-    if missing_files:
-        print(f"\n[{symbol}] 以下输出文件未找到，已跳过复制：", flush=True)
-        for missing_file in missing_files:
-            print(f"- {missing_file}", flush=True)
-
-    return missing_files
 
 
 def main():
@@ -433,12 +340,12 @@ def main():
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help=f"独立结果目录，默认：{DEFAULT_OUTPUT_DIR}",
+        help=f"结果目录，默认：{DEFAULT_OUTPUT_DIR}",
     )
     parser.add_argument(
         "--collect-only",
         action="store_true",
-        help="不重新运行脚本，只基于现有 results/ 复制 11 号因子输出并生成汇总。",
+        help="不重新运行脚本，只基于结果目录中现有 11 号因子输出生成汇总。",
     )
     parser.add_argument(
         "--skip-prepare",
@@ -453,7 +360,7 @@ def main():
     parser.add_argument(
         "--skip-backtest",
         action="store_true",
-        help="跳过回测，只复制已有输出并汇总。",
+        help="跳过回测，只基于结果目录中已有回测输出汇总。",
     )
     parser.add_argument(
         "--keep-going",
@@ -470,7 +377,7 @@ def main():
 
     print(f"本次运行品种数量：{len(symbols)}", flush=True)
     print(f"品种列表：{','.join(symbols)}", flush=True)
-    print(f"独立结果目录：{output_dir}", flush=True)
+    print(f"结果目录：{output_dir}", flush=True)
 
     for symbol in symbols:
         print(f"\n###### 开始处理品种：{symbol} ######", flush=True)

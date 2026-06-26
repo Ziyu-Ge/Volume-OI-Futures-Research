@@ -31,6 +31,17 @@ import matplotlib.pyplot as plt
 
 MAD_SCALE = 1.4826
 MAD_EPSILON = 1e-12
+RESULTS_OUTPUT_ENV_VAR = "RESULTS_OUTPUT_DIR"
+
+
+def get_results_dir(results_dir=None):
+    if results_dir is None:
+        results_dir = os.environ.get(RESULTS_OUTPUT_ENV_VAR)
+
+    if results_dir is None:
+        results_dir = os.path.join(project_root, "results")
+
+    return os.path.abspath(os.path.expanduser(str(results_dir)))
 
 
 def parse_factor_script_metadata(file_path):
@@ -42,20 +53,29 @@ def parse_factor_script_metadata(file_path):
     return match.group(1), match.group(2)
 
 
-def load_daily(symbol):
-    tables_dir = os.path.join(project_root, "results", "tables")
+def load_daily(symbol, results_dir=None):
+    tables_dir = os.path.join(get_results_dir(results_dir), "tables")
+    daily_filename = f"{symbol}_daily.csv"
+    daily_input_candidates = [
+        os.path.join(tables_dir, "daily", daily_filename),
+        os.path.join(tables_dir, daily_filename),
+    ]
 
-    daily_input_path = os.path.join(
-        tables_dir,
-        "daily",
-        f"{symbol}_daily.csv"
+    default_tables_dir = os.path.join(project_root, "results", "tables")
+    if os.path.abspath(tables_dir) != os.path.abspath(default_tables_dir):
+        daily_input_candidates.extend([
+            os.path.join(default_tables_dir, "daily", daily_filename),
+            os.path.join(default_tables_dir, daily_filename),
+        ])
+
+    daily_input_path = next(
+        (
+            candidate_path
+            for candidate_path in daily_input_candidates
+            if os.path.exists(candidate_path)
+        ),
+        daily_input_candidates[0],
     )
-
-    if not os.path.exists(daily_input_path):
-        daily_input_path = os.path.join(
-            tables_dir,
-            f"{symbol}_daily.csv"
-        )
 
     daily = pd.read_csv(daily_input_path)
 
@@ -353,6 +373,7 @@ def save_factor_outputs(
     feature_columns,
     figure_feature_columns=None,
     signal_holding_days=1,
+    results_dir=None,
 ):
     daily = daily.copy()
 
@@ -379,8 +400,9 @@ def save_factor_outputs(
     # Backward-compatible alias for older backtest/output code.
     daily["position_scale"] = daily["position"]
 
-    tables_dir = os.path.join(project_root, "results", "tables")
-    figures_dir = os.path.join(project_root, "results", "figures")
+    output_root = get_results_dir(results_dir)
+    tables_dir = os.path.join(output_root, "tables")
+    factor_figures_dir = os.path.join(output_root, "figures", "factors")
 
     factor_output_path = os.path.join(
         tables_dir,
@@ -398,11 +420,11 @@ def save_factor_outputs(
         f"{symbol}_{factor_id}_{factor_name}_summary.csv"
     )
     price_figure_path = os.path.join(
-        figures_dir,
+        factor_figures_dir,
         f"{symbol}_{factor_id}_{factor_name}_signal_on_price.png"
     )
     factor_figure_path = os.path.join(
-        figures_dir,
+        factor_figures_dir,
         f"{symbol}_{factor_id}_{factor_name}_factor_value.png"
     )
 
@@ -515,4 +537,6 @@ def save_factor_outputs(
         "factor_output_path": factor_output_path,
         "signal_output_path": signal_output_path,
         "summary_output_path": summary_output_path,
+        "price_figure_path": price_figure_path,
+        "factor_figure_path": factor_figure_path,
     }

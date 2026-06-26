@@ -50,7 +50,7 @@ signal_position_scale = 1
 ma_short_window = 5
 ma_mid_window = 10
 ma_long_window = 20
-ma_gap_threshold = 0.02
+ma_gap_threshold = 0.01
 
 # =========================
 # 1. 读取日频数据并补充量价特征

@@ -7,6 +7,14 @@ from config import SYMBOL
 
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+results_dir = os.path.abspath(
+    os.path.expanduser(
+        os.environ.get(
+            "RESULTS_OUTPUT_DIR",
+            os.path.join(project_root, "results"),
+        )
+    )
+)
 
 
 # =========================
@@ -16,8 +24,7 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 symbol = SYMBOL
 data_path = os.path.join(project_root, "data", f"{symbol}.csv")
 daily_output_path = os.path.join(
-    project_root,
-    "results",
+    results_dir,
     "tables",
     "daily",
     f"{symbol}_daily.csv",

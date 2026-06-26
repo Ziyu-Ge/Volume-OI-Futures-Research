@@ -38,15 +38,23 @@ import matplotlib.pyplot as plt
 symbol = os.environ.get("SYMBOL", SYMBOL)
 factor_id_filter = os.environ.get("FACTOR_ID", "ALL")
 factor_name_filter = os.environ.get("FACTOR_NAME")
+results_dir = os.path.abspath(
+    os.path.expanduser(
+        os.environ.get(
+            "RESULTS_OUTPUT_DIR",
+            os.path.join(project_root, "results"),
+        )
+    )
+)
 
 annual_days = 252
 plot_dpi = 300
 figsize = (12, 6)
 
-factor_dir = os.path.join(project_root, "results", "tables", "factors")
-daily_dir = os.path.join(project_root, "results", "tables", "daily")
-backtest_dir = os.path.join(project_root, "results", "tables", "backtest")
-figure_dir = os.path.join(project_root, "results", "figures", "backtest")
+factor_dir = os.path.join(results_dir, "tables", "factors")
+daily_dir = os.path.join(results_dir, "tables", "daily")
+backtest_dir = os.path.join(results_dir, "tables", "backtest")
+figure_dir = os.path.join(results_dir, "figures", "backtest")
 daily_input_path = os.path.join(daily_dir, f"{symbol}_daily.csv")
 
 # These columns are already aligned to the trading day by factor scripts.
