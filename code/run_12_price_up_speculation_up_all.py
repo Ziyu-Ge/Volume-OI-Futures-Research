@@ -6,7 +6,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-
 CODE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CODE_DIR.parent
 DATA_DIR = PROJECT_ROOT / "data"
@@ -15,11 +14,12 @@ RESULTS_DIR = PROJECT_ROOT / "results"
 FACTOR_ID = "12"
 FACTOR_NAME = "price_up_speculation_up"
 FACTOR_SCRIPT = CODE_DIR / "factors" / "12price_up_speculation_up.py"
-PREPARE_SCRIPT = CODE_DIR / "00_prepare_data.py"
+PREPARE_SCRIPT = CODE_DIR / "01_prepare_data.py"
 BACKTEST_SCRIPT = CODE_DIR / "backtest" / "backtest_sum.py"
 DEFAULT_OUTPUT_DIR = (
-    RESULTS_DIR / "runs" / "12_price_up_speculation_up_all_symbols"
+    RESULTS_DIR / "runs" / "12_price_up_speculation_up_15min_all_symbols"
 )
+FACTOR_DATA_FREQUENCY = "15min"
 
 os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(PROJECT_ROOT / ".cache"))
@@ -109,6 +109,7 @@ def build_env(symbol):
     env = os.environ.copy()
     env["SYMBOL"] = symbol
     env["FACTOR_ID"] = FACTOR_ID
+    env["FACTOR_DATA_FREQUENCY"] = FACTOR_DATA_FREQUENCY
     env.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
     env.setdefault("XDG_CACHE_HOME", str(PROJECT_ROOT / ".cache"))
     return env
@@ -143,12 +144,12 @@ def collect_file(source_path, destination_path):
     return True
 
 
-def collect_symbol_outputs(symbol, output_dir):
+def collect_symbol_outputs(symbol, output_dir, include_backtest=True):
     filename_prefix = f"{symbol}_{FACTOR_ID}_{FACTOR_NAME}"
     source_files = [
         (
-            RESULTS_DIR / "tables" / "daily" / f"{symbol}_daily.csv",
-            output_dir / "tables" / "daily" / f"{symbol}_daily.csv",
+            RESULTS_DIR / "tables" / "15min" / f"{symbol}_15min.csv",
+            output_dir / "tables" / "15min" / f"{symbol}_15min.csv",
         ),
         (
             RESULTS_DIR / "tables" / "factors" / f"{filename_prefix}.csv",
@@ -164,26 +165,6 @@ def collect_symbol_outputs(symbol, output_dir):
         ),
         (
             RESULTS_DIR
-            / "tables"
-            / "backtest"
-            / f"{filename_prefix}_long_only_simple_backtest.csv",
-            output_dir
-            / "tables"
-            / "backtest"
-            / f"{filename_prefix}_long_only_simple_backtest.csv",
-        ),
-        (
-            RESULTS_DIR
-            / "tables"
-            / "backtest"
-            / f"{filename_prefix}_long_only_simple_summary.csv",
-            output_dir
-            / "tables"
-            / "backtest"
-            / f"{filename_prefix}_long_only_simple_summary.csv",
-        ),
-        (
-            RESULTS_DIR
             / "figures"
             / f"{filename_prefix}_signal_on_price.png",
             output_dir
@@ -199,18 +180,42 @@ def collect_symbol_outputs(symbol, output_dir):
             / "figures"
             / "factors"
             / f"{filename_prefix}_factor_value.png",
-        ),
-        (
-            RESULTS_DIR
-            / "figures"
-            / "backtest"
-            / f"{filename_prefix}_simple_nav.png",
-            output_dir
-            / "figures"
-            / "backtest"
-            / f"{filename_prefix}_simple_nav.png",
         ),
     ]
+
+    if include_backtest:
+        source_files.extend([
+            (
+                RESULTS_DIR
+                / "tables"
+                / "backtest"
+                / f"{filename_prefix}_long_only_simple_backtest.csv",
+                output_dir
+                / "tables"
+                / "backtest"
+                / f"{filename_prefix}_long_only_simple_backtest.csv",
+            ),
+            (
+                RESULTS_DIR
+                / "tables"
+                / "backtest"
+                / f"{filename_prefix}_long_only_simple_summary.csv",
+                output_dir
+                / "tables"
+                / "backtest"
+                / f"{filename_prefix}_long_only_simple_summary.csv",
+            ),
+            (
+                RESULTS_DIR
+                / "figures"
+                / "backtest"
+                / f"{filename_prefix}_simple_nav.png",
+                output_dir
+                / "figures"
+                / "backtest"
+                / f"{filename_prefix}_simple_nav.png",
+            ),
+        ])
 
     missing_files = []
     for source_path, destination_path in source_files:
@@ -363,15 +368,17 @@ def save_summary_figure(wide_summary, output_dir):
     return figure_path
 
 
-def save_combined_summaries(symbols, output_dir):
+def save_combined_summaries(symbols, output_dir, require_backtest=True):
     summaries = []
     for symbol in symbols:
         summary = read_backtest_summary(symbol, output_dir)
         if summary is not None:
             summaries.append(summary)
 
-    if not summaries:
+    if not summaries and require_backtest:
         raise FileNotFoundError("没有找到可汇总的 12 号因子回测 summary。")
+    if not summaries:
+        return None
 
     combined_summary = pd.concat(summaries, ignore_index=True)
     wide_summary = build_wide_summary(combined_summary)
@@ -410,7 +417,11 @@ def run_symbol(symbol, args, output_dir):
         if not args.skip_backtest:
             run_script(BACKTEST_SCRIPT, symbol, env)
 
-    missing_files = collect_symbol_outputs(symbol, output_dir)
+    missing_files = collect_symbol_outputs(
+        symbol,
+        output_dir,
+        include_backtest=not args.skip_backtest,
+    )
     if missing_files:
         print(f"\n[{symbol}] 以下输出文件未找到，已跳过复制：", flush=True)
         for missing_file in missing_files:
@@ -443,7 +454,7 @@ def main():
     parser.add_argument(
         "--skip-prepare",
         action="store_true",
-        help="跳过日频数据准备。",
+        help="跳过 15min 数据准备。",
     )
     parser.add_argument(
         "--skip-factor",
@@ -483,15 +494,22 @@ def main():
             failures.append((symbol, exc))
             print(f"\n!!!!!! 品种 {symbol} 处理失败：{exc} !!!!!!", flush=True)
 
-    summary_info = save_combined_summaries(symbols, output_dir)
+    summary_info = save_combined_summaries(
+        symbols,
+        output_dir,
+        require_backtest=not args.skip_backtest,
+    )
 
     print("\n全部任务完成。", flush=True)
     print(f"成功处理品种数量：{len(symbols) - len(failures)}", flush=True)
-    print(f"汇总品种数量：{summary_info['summary_count']}", flush=True)
-    print(f"汇总表：{summary_info['wide_summary_path']}", flush=True)
-    print(f"长表汇总：{summary_info['combined_summary_path']}", flush=True)
-    if summary_info["figure_path"] is not None:
-        print(f"汇总图：{summary_info['figure_path']}", flush=True)
+    if summary_info is not None:
+        print(f"汇总品种数量：{summary_info['summary_count']}", flush=True)
+        print(f"汇总表：{summary_info['wide_summary_path']}", flush=True)
+        print(f"长表汇总：{summary_info['combined_summary_path']}", flush=True)
+        if summary_info["figure_path"] is not None:
+            print(f"汇总图：{summary_info['figure_path']}", flush=True)
+    else:
+        print("已跳过回测汇总。", flush=True)
 
     if failures:
         print(f"\n失败品种数量：{len(failures)}", flush=True)

@@ -3,9 +3,11 @@ import numpy as np
 from volume_price_factor_utils import (
     SYMBOL,
     load_daily,
-    mad_score,
     parse_factor_script_metadata,
     save_factor_outputs,
+    trading_day_mad_score,
+    trading_day_pct_change,
+    trading_day_rolling_mean,
 )
 
 
@@ -23,7 +25,7 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 ma_short_window = 5
 ma_mid_window = 10
 ma_long_window = 20
-ma_gap_threshold = 0.02
+ma_gap_threshold = 0.015
 
 # 持仓量均线窗口。
 # open_interest_ma_5 > open_interest_ma_10 表示短期持仓量高于中期持仓量；
@@ -39,7 +41,7 @@ spec_window = 10
 # 投机度突然升高的阈值。
 # MAD score >= 1 表示今天投机度相对过去一段时间明显偏高；
 # 最终信号要求价格均线偏强、持仓量均线偏强、投机度 MAD score 达标三者同时成立。
-spec_mad_threshold = 1
+spec_mad_threshold = 1.5
 
 # MAD 缩放系数和极小值保护沿用公共 mad_score() 的默认值：
 # 1.4826 把 MAD 调整到类似标准差的尺度；
@@ -71,22 +73,31 @@ daily = load_daily(symbol)
 # 这和原实现一致。若之后用于真实交易或回测，仍应在回测端使用 signal.shift(1)
 # 产生下一交易日仓位，避免用当天收盘后才确认的信号交易当天。
 
-daily["daily_return"] = daily["close"].pct_change()
+daily["daily_return"] = trading_day_pct_change(daily, "close", 1)
 
 daily["price_ma_5"] = (
-    daily["close"]
-    .rolling(window=ma_short_window, min_periods=ma_short_window)
-    .mean()
+    trading_day_rolling_mean(
+        daily,
+        "close",
+        window_days=ma_short_window,
+        min_history_days=ma_short_window,
+    )
 )
 daily["price_ma_10"] = (
-    daily["close"]
-    .rolling(window=ma_mid_window, min_periods=ma_mid_window)
-    .mean()
+    trading_day_rolling_mean(
+        daily,
+        "close",
+        window_days=ma_mid_window,
+        min_history_days=ma_mid_window,
+    )
 )
 daily["price_ma_20"] = (
-    daily["close"]
-    .rolling(window=ma_long_window, min_periods=ma_long_window)
-    .mean()
+    trading_day_rolling_mean(
+        daily,
+        "close",
+        window_days=ma_long_window,
+        min_history_days=ma_long_window,
+    )
 )
 
 daily["is_ma_bullish"] = (
@@ -106,20 +117,20 @@ daily["ma_bull_stack_filter"] = (
 )
 
 daily["open_interest_ma_5"] = (
-    daily["open_interest"]
-    .rolling(
-        window=open_interest_short_window,
-        min_periods=open_interest_short_window,
+    trading_day_rolling_mean(
+        daily,
+        "open_interest",
+        window_days=open_interest_short_window,
+        min_history_days=open_interest_short_window,
     )
-    .mean()
 )
 daily["open_interest_ma_10"] = (
-    daily["open_interest"]
-    .rolling(
-        window=open_interest_mid_window,
-        min_periods=open_interest_mid_window,
+    trading_day_rolling_mean(
+        daily,
+        "open_interest",
+        window_days=open_interest_mid_window,
+        min_history_days=open_interest_mid_window,
     )
-    .mean()
 )
 
 daily["is_open_interest_ma_bullish"] = (
@@ -141,9 +152,10 @@ daily["is_open_interest_ma_bullish"] = (
     daily["speculation_median_past"],
     daily["speculation_mad_past"],
     daily["speculation_mad_score"],
-) = mad_score(
-    daily["speculation"],
-    window=spec_window,
+) = trading_day_mad_score(
+    daily,
+    "speculation",
+    window_days=spec_window,
     min_history_days=min_history_days,
     mad_scale=mad_scale,
     mad_epsilon=mad_epsilon,

@@ -286,6 +286,13 @@ def load_all_factor_data(factor_files):
     return frames, errors
 
 
+def format_datetime_text(value):
+    if pd.isna(value):
+        return ""
+
+    return pd.Timestamp(value).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def build_signal_stats(factor_frames):
     rows = []
 
@@ -319,12 +326,12 @@ def build_signal_stats(factor_frames):
             "signal_days": int(daily["signal"].sum()),
             "signal_ratio": daily["signal"].mean(),
             "first_signal_date": (
-                first_signal["date"].date().isoformat()
+                format_datetime_text(first_signal["date"])
                 if first_signal is not None
                 else ""
             ),
             "last_signal_date": (
-                last_signal["date"].date().isoformat()
+                format_datetime_text(last_signal["date"])
                 if last_signal is not None
                 else ""
             ),
@@ -419,6 +426,36 @@ def factor_style_map(factor_labels):
     return styles
 
 
+def configure_datetime_axis(ax, dates):
+    dates = pd.Series(dates).dropna()
+    if dates.empty:
+        return
+
+    span = dates.max() - dates.min()
+    total_days = max(span / pd.Timedelta(days=1), 0)
+
+    if total_days > 365 * 2:
+        interval = max(1, int(total_days / (365 * 10)) + 1)
+        locator = mdates.YearLocator(base=interval)
+    elif total_days > 60:
+        interval = max(1, int(total_days / (30 * 10)) + 1)
+        locator = mdates.MonthLocator(interval=interval)
+    elif total_days > 2:
+        interval = max(1, int(total_days / 10) + 1)
+        locator = mdates.DayLocator(interval=interval)
+    elif total_days > 0.25:
+        total_hours = total_days * 24
+        interval = max(1, int(total_hours / 10) + 1)
+        locator = mdates.HourLocator(interval=interval)
+    else:
+        total_minutes = max(total_days * 24 * 60, 1)
+        interval = max(1, int(total_minutes / 10) + 1)
+        locator = mdates.MinuteLocator(interval=interval)
+
+    ax.xaxis.set_major_locator(locator)
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d\n%H:%M"))
+
+
 def plot_symbol_signals(symbol, frames, styles, figures_dir, dpi):
     symbol_frames = [frame for frame in frames if frame["symbol"].iloc[0] == symbol]
     if not symbol_frames:
@@ -459,11 +496,11 @@ def plot_symbol_signals(symbol, frames, styles, figures_dir, dpi):
         )
 
     ax.set_title(f"{symbol} combined factor signals", fontsize=16)
-    ax.set_xlabel("Date")
+    ax.set_xlabel("Date Time")
     ax.set_ylabel("Close price")
     ax.grid(True, alpha=0.22)
-    ax.xaxis.set_major_locator(mdates.YearLocator(base=1))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    configure_datetime_axis(ax, price_frame["date"])
+    fig.autofmt_xdate(rotation=0, ha="center")
     ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1.0), frameon=False)
     fig.tight_layout(rect=[0, 0, 0.84, 1])
 
@@ -495,7 +532,9 @@ def prepare_interactive_signal_points(daily):
     if "factor_value" not in signals.columns:
         signals["factor_value"] = pd.NA
 
-    signals["signal_date_text"] = signals["date"].dt.strftime("%Y-%m-%d")
+    signals["signal_date_text"] = signals["date"].dt.strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
     signals["factor_value_text"] = signals["factor_value"].map(format_factor_value)
 
     return signals
@@ -519,7 +558,7 @@ def plot_symbol_signals_html(symbol, frames, styles, figures_dir):
             name="close",
             line={"color": "#111827", "width": 1.5},
             hovertemplate=(
-                "date=%{x|%Y-%m-%d}<br>"
+                "date=%{x|%Y-%m-%d %H:%M:%S}<br>"
                 "close=%{y:.4f}<extra>close</extra>"
             ),
         )
@@ -574,7 +613,8 @@ def plot_symbol_signals_html(symbol, frames, styles, figures_dir):
         hovermode="closest",
         dragmode="zoom",
         xaxis={
-            "title": "Date",
+            "title": "Date Time",
+            "tickformat": "%Y-%m-%d<br>%H:%M",
             "showgrid": True,
             "gridcolor": "rgba(17, 24, 39, 0.08)",
             "rangeslider": {"visible": True, "thickness": 0.06},

@@ -3,11 +3,14 @@ import numpy as np
 from volume_price_factor_utils import (
     SYMBOL,
     load_daily,
-    mad_score,
     parse_factor_script_metadata,
-    past_rank,
     positive_part,
     save_factor_outputs,
+    trading_day_mad_score,
+    trading_day_past_rank,
+    trading_day_pct_change,
+    trading_day_rolling_mean,
+    trading_day_shift,
 )
 
 
@@ -24,8 +27,8 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 # oi_change_5_rate_mad_abs_score >= 1.0 表示 5 日持仓变化率明显偏离常态；
 # volume_mad_score >= 1.0 表示成交量相对过去窗口明显放大。
 price_rank_threshold = 0.90
-oi_change_mad_threshold = 1.0
-volume_mad_threshold = 1.0
+oi_change_mad_threshold = 1.5
+volume_mad_threshold = 1.5
 
 # 价格历史分位窗口。
 # close_rank_20 用于短期价格强弱判断，close_rank_60 主要进入输出特征和图形，
@@ -56,7 +59,7 @@ signal_holding_days = 1
 ma_short_window = 5
 ma_mid_window = 10
 ma_long_window = 20
-ma_gap_threshold = 0.02
+ma_gap_threshold = 0.012
 
 
 # =========================
@@ -72,17 +75,23 @@ daily = load_daily(symbol)
 # past_rank() 使用今天以前的历史样本比较当前价格，
 # 因此 close_rank_20/60 表示今天收盘价在过去窗口中的相对位置。
 
-daily["daily_return"] = daily["close"].pct_change()
-daily["ret_5"] = daily["close"].pct_change(5)
+daily["daily_return"] = trading_day_pct_change(daily, "close", 1)
+daily["ret_5"] = trading_day_pct_change(
+    daily,
+    "close",
+    oi_change_window,
+)
 
-daily["close_rank_20"] = past_rank(
-    daily["close"],
-    window=price_rank_window,
+daily["close_rank_20"] = trading_day_past_rank(
+    daily,
+    "close",
+    window_days=price_rank_window,
     min_history_days=min_rank_days,
 )
-daily["close_rank_60"] = past_rank(
-    daily["close"],
-    window=price_rank_long_window,
+daily["close_rank_60"] = trading_day_past_rank(
+    daily,
+    "close",
+    window_days=price_rank_long_window,
     min_history_days=min_rank_long_days,
 )
 
@@ -100,9 +109,10 @@ daily["log_volume"] = np.log(safe_volume)
     daily["log_volume_median_past"],
     daily["log_volume_mad_past"],
     daily["volume_mad_score"],
-) = mad_score(
-    daily["log_volume"],
-    window=volume_mad_window,
+) = trading_day_mad_score(
+    daily,
+    "log_volume",
+    window_days=volume_mad_window,
     min_history_days=min_mad_days,
 )
 
@@ -116,20 +126,25 @@ daily["log_volume"] = np.log(safe_volume)
 
 daily["oi_change_5"] = (
     daily["open_interest"] -
-    daily["open_interest"].shift(oi_change_window)
+    trading_day_shift(daily, "open_interest", oi_change_window)
 )
 daily["oi_change_5_rate"] = (
     daily["oi_change_5"] /
-    daily["open_interest"].shift(oi_change_window).replace(0, np.nan)
+    trading_day_shift(
+        daily,
+        "open_interest",
+        oi_change_window,
+    ).replace(0, np.nan)
 )
 
 (
     daily["oi_change_5_rate_median_past"],
     daily["oi_change_5_rate_mad_past"],
     daily["oi_change_5_rate_mad_score"],
-) = mad_score(
-    daily["oi_change_5_rate"],
-    window=oi_change_mad_window,
+) = trading_day_mad_score(
+    daily,
+    "oi_change_5_rate",
+    window_days=oi_change_mad_window,
     min_history_days=min_mad_days,
 )
 
@@ -158,19 +173,28 @@ daily["price_volume_oi_score"] = (
 # 并且 ma5/ma10、ma10/ma20 的乖离率均超过 ma_gap_threshold。
 
 daily["ma5"] = (
-    daily["close"]
-    .rolling(ma_short_window, min_periods=ma_short_window)
-    .mean()
+    trading_day_rolling_mean(
+        daily,
+        "close",
+        window_days=ma_short_window,
+        min_history_days=ma_short_window,
+    )
 )
 daily["ma10"] = (
-    daily["close"]
-    .rolling(ma_mid_window, min_periods=ma_mid_window)
-    .mean()
+    trading_day_rolling_mean(
+        daily,
+        "close",
+        window_days=ma_mid_window,
+        min_history_days=ma_mid_window,
+    )
 )
 daily["ma20"] = (
-    daily["close"]
-    .rolling(ma_long_window, min_periods=ma_long_window)
-    .mean()
+    trading_day_rolling_mean(
+        daily,
+        "close",
+        window_days=ma_long_window,
+        min_history_days=ma_long_window,
+    )
 )
 
 daily["ma5_ma10_bias"] = daily["ma5"] / daily["ma10"] - 1

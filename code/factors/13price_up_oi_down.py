@@ -3,10 +3,13 @@ import numpy as np
 from volume_price_factor_utils import (
     SYMBOL,
     load_daily,
-    mad_score,
     parse_factor_script_metadata,
-    past_rank,
     save_factor_outputs,
+    trading_day_mad_score,
+    trading_day_past_rank,
+    trading_day_pct_change,
+    trading_day_rolling_mean,
+    trading_day_shift,
 )
 
 
@@ -23,7 +26,7 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 ma_short_window = 5
 ma_mid_window = 10
 ma_long_window = 20
-ma_gap_threshold = 0.02
+ma_gap_threshold = 0.01
 
 # oi_window 表示持仓量历史参照窗口。
 # 持仓量先取 log，再和过去 oi_window 天的 log(open_interest) 比较；
@@ -67,22 +70,31 @@ daily = load_daily(symbol)
 # 注意：价格均线包含今天的收盘价，因为今天收盘后才能确认今天的均线状态；
 # 如果之后真实交易或回测，仍应在回测端用 signal.shift(1) 后的仓位赚下一天收益。
 
-daily["daily_return"] = daily["close"].pct_change()
+daily["daily_return"] = trading_day_pct_change(daily, "close", 1)
 
 daily["price_ma_5"] = (
-    daily["close"]
-    .rolling(window=ma_short_window, min_periods=ma_short_window)
-    .mean()
+    trading_day_rolling_mean(
+        daily,
+        "close",
+        window_days=ma_short_window,
+        min_history_days=ma_short_window,
+    )
 )
 daily["price_ma_10"] = (
-    daily["close"]
-    .rolling(window=ma_mid_window, min_periods=ma_mid_window)
-    .mean()
+    trading_day_rolling_mean(
+        daily,
+        "close",
+        window_days=ma_mid_window,
+        min_history_days=ma_mid_window,
+    )
 )
 daily["price_ma_20"] = (
-    daily["close"]
-    .rolling(window=ma_long_window, min_periods=ma_long_window)
-    .mean()
+    trading_day_rolling_mean(
+        daily,
+        "close",
+        window_days=ma_long_window,
+        min_history_days=ma_long_window,
+    )
 )
 
 daily["is_ma_bullish"] = (
@@ -113,15 +125,17 @@ daily["ma_bull_stack_filter"] = (
 # 它确保今天持仓量相对上一交易日确实下降。
 
 daily.loc[daily["open_interest"] <= 0, "open_interest"] = np.nan
-daily["open_interest_rank_10"] = past_rank(
-    daily["open_interest"],
-    window=oi_rank_window,
+daily["open_interest_rank_10"] = trading_day_past_rank(
+    daily,
+    "open_interest",
+    window_days=oi_rank_window,
     min_history_days=min_history_days,
 )
 daily["log_open_interest"] = np.log(daily["open_interest"])
 
 daily["delta_log_open_interest"] = (
-    daily["log_open_interest"] - daily["log_open_interest"].shift(1)
+    daily["log_open_interest"] -
+    trading_day_shift(daily, "log_open_interest", 1)
 )
 
 daily["oi_change_rate"] = (
@@ -137,9 +151,10 @@ daily["oi_change_rate"] = (
     daily["log_open_interest_median_past"],
     daily["log_open_interest_mad_past"],
     daily["log_open_interest_mad_score"],
-) = mad_score(
-    daily["log_open_interest"],
-    window=oi_window,
+) = trading_day_mad_score(
+    daily,
+    "log_open_interest",
+    window_days=oi_window,
     min_history_days=min_history_days,
     mad_scale=mad_scale,
     mad_epsilon=mad_epsilon,

@@ -31,6 +31,8 @@ import matplotlib.pyplot as plt
 
 MAD_SCALE = 1.4826
 MAD_EPSILON = 1e-12
+FACTOR_DATA_FREQUENCY_ENV = "FACTOR_DATA_FREQUENCY"
+INTRADAY_FREQUENCIES = {"15min", "15m", "15"}
 
 
 def parse_factor_script_metadata(file_path):
@@ -42,7 +44,18 @@ def parse_factor_script_metadata(file_path):
     return match.group(1), match.group(2)
 
 
+def get_factor_data_frequency():
+    return os.environ.get(FACTOR_DATA_FREQUENCY_ENV, "daily").lower()
+
+
+def is_intraday_frequency():
+    return get_factor_data_frequency() in INTRADAY_FREQUENCIES
+
+
 def load_daily(symbol):
+    if is_intraday_frequency():
+        return load_15min(symbol)
+
     tables_dir = os.path.join(project_root, "results", "tables")
 
     daily_input_path = os.path.join(
@@ -63,6 +76,162 @@ def load_daily(symbol):
     daily = daily.sort_values("date").reset_index(drop=True)
 
     return daily
+
+
+def load_15min(symbol):
+    input_path = os.path.join(
+        project_root,
+        "results",
+        "tables",
+        "15min",
+        f"{symbol}_15min.csv",
+    )
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(
+            f"15min table not found: {input_path}. "
+            "Please run code/01_prepare_data.py first."
+        )
+
+    data = pd.read_csv(input_path)
+
+    datetime_columns = [
+        "date",
+        "trading_day",
+        "trading_day_start_datetime",
+        "bar_start_datetime",
+        "bar_end_datetime",
+    ]
+    for column in datetime_columns:
+        if column in data.columns:
+            data[column] = pd.to_datetime(data[column])
+
+    data = data.sort_values("date").reset_index(drop=True)
+    return data
+
+
+def is_intraday_data(data):
+    required_columns = {
+        "trading_day_id",
+        "bar_index_in_trading_day",
+    }
+    return required_columns.issubset(data.columns)
+
+
+def _bar_time_key(data):
+    if "bar_end_datetime" in data.columns:
+        return pd.to_datetime(data["bar_end_datetime"]).dt.strftime("%H:%M:%S")
+
+    return pd.to_datetime(data["date"]).dt.strftime("%H:%M:%S")
+
+
+def _same_bar_time_transform(data, column, transform_func):
+    result = pd.Series(np.nan, index=data.index, dtype="float64")
+    bar_time = _bar_time_key(data)
+
+    for _, index in data.groupby(bar_time, sort=False).groups.items():
+        group_series = data.loc[index, column]
+        result.loc[index] = transform_func(group_series).to_numpy()
+
+    return result
+
+
+def trading_day_shift(data, column, days):
+    if not is_intraday_data(data):
+        return data[column].shift(days)
+
+    return _same_bar_time_transform(
+        data,
+        column,
+        lambda series: series.shift(days),
+    )
+
+
+def trading_day_pct_change(data, column, days):
+    previous = trading_day_shift(data, column, days)
+    return data[column] / previous - 1
+
+
+def trading_day_rolling_mean(
+    data,
+    column,
+    window_days,
+    min_history_days=None,
+):
+    if min_history_days is None:
+        min_history_days = window_days
+
+    if not is_intraday_data(data):
+        return (
+            data[column]
+            .rolling(window_days, min_periods=min_history_days)
+            .mean()
+        )
+
+    return _same_bar_time_transform(
+        data,
+        column,
+        lambda series: (
+            series
+            .rolling(window_days, min_periods=min_history_days)
+            .mean()
+        ),
+    )
+
+
+def trading_day_past_rank(data, column, window_days, min_history_days):
+    if not is_intraday_data(data):
+        return past_rank(
+            data[column],
+            window=window_days,
+            min_history_days=min_history_days,
+        )
+
+    return _same_bar_time_transform(
+        data,
+        column,
+        lambda series: past_rank(
+            series,
+            window=window_days,
+            min_history_days=min_history_days,
+        ),
+    )
+
+
+def trading_day_mad_score(
+    data,
+    column,
+    window_days,
+    min_history_days,
+    mad_scale=MAD_SCALE,
+    mad_epsilon=MAD_EPSILON,
+):
+    if not is_intraday_data(data):
+        return mad_score(
+            data[column],
+            window=window_days,
+            min_history_days=min_history_days,
+            mad_scale=mad_scale,
+            mad_epsilon=mad_epsilon,
+        )
+
+    median_past = pd.Series(np.nan, index=data.index, dtype="float64")
+    mad_past = pd.Series(np.nan, index=data.index, dtype="float64")
+    score = pd.Series(np.nan, index=data.index, dtype="float64")
+    bar_time = _bar_time_key(data)
+
+    for _, index in data.groupby(bar_time, sort=False).groups.items():
+        group_median, group_mad, group_score = mad_score(
+            data.loc[index, column],
+            window=window_days,
+            min_history_days=min_history_days,
+            mad_scale=mad_scale,
+            mad_epsilon=mad_epsilon,
+        )
+        median_past.loc[index] = group_median.to_numpy()
+        mad_past.loc[index] = group_mad.to_numpy()
+        score.loc[index] = group_score.to_numpy()
+
+    return median_past, mad_past, score
 
 
 def past_rank(series, window, min_history_days):
@@ -171,10 +340,14 @@ def add_volume_price_features(
     min_mad_days=5,
 ):
     daily = daily.copy()
-    daily["daily_return"] = daily["close"].pct_change()
+    daily["daily_return"] = trading_day_pct_change(daily, "close", 1)
 
     for window in [1, 3, 5, 10]:
-        daily[f"ret_{window}"] = daily["close"].pct_change(window)
+        daily[f"ret_{window}"] = trading_day_pct_change(
+            daily,
+            "close",
+            window,
+        )
 
     safe_open_interest = daily["open_interest"].where(
         daily["open_interest"] > 0,
@@ -188,11 +361,11 @@ def add_volume_price_features(
     for window in [1, 3, 5, 10]:
         daily[f"oi_ret_{window}"] = (
             daily["log_open_interest"] -
-            daily["log_open_interest"].shift(window)
+            trading_day_shift(daily, "log_open_interest", window)
         )
         daily[f"volume_ret_{window}"] = (
             daily["log_volume"] -
-            daily["log_volume"].shift(window)
+            trading_day_shift(daily, "log_volume", window)
         )
 
     daily["range_pct"] = (
@@ -211,19 +384,22 @@ def add_volume_price_features(
         daily["volume_to_open_interest"].replace(0, np.nan)
     )
 
-    daily["close_rank_20"] = past_rank(
-        daily["close"],
-        window=price_rank_window,
+    daily["close_rank_20"] = trading_day_past_rank(
+        daily,
+        "close",
+        window_days=price_rank_window,
         min_history_days=min_rank_days,
     )
-    daily["close_rank_60"] = past_rank(
-        daily["close"],
-        window=60,
+    daily["close_rank_60"] = trading_day_past_rank(
+        daily,
+        "close",
+        window_days=60,
         min_history_days=20,
     )
-    daily["price_efficiency_rank_20"] = past_rank(
-        daily["price_efficiency_5"],
-        window=price_rank_window,
+    daily["price_efficiency_rank_20"] = trading_day_past_rank(
+        daily,
+        "price_efficiency_5",
+        window_days=price_rank_window,
         min_history_days=min_rank_days,
     )
     daily["price_efficiency_low_rank_20"] = (
@@ -234,9 +410,10 @@ def add_volume_price_features(
         daily["log_volume_median_past"],
         daily["log_volume_mad_past"],
         daily["volume_mad_score"],
-    ) = mad_score(
-        daily["log_volume"],
-        window=mad_window,
+    ) = trading_day_mad_score(
+        daily,
+        "log_volume",
+        window_days=mad_window,
         min_history_days=min_mad_days,
     )
 
@@ -244,9 +421,10 @@ def add_volume_price_features(
         daily["range_pct_median_past"],
         daily["range_pct_mad_past"],
         daily["range_mad_score"],
-    ) = mad_score(
-        daily["range_pct"],
-        window=mad_window,
+    ) = trading_day_mad_score(
+        daily,
+        "range_pct",
+        window_days=mad_window,
         min_history_days=min_mad_days,
     )
 
@@ -254,9 +432,10 @@ def add_volume_price_features(
         daily["speculation_median_past"],
         daily["speculation_mad_past"],
         daily["speculation_mad_score"],
-    ) = mad_score(
-        daily["speculation"],
-        window=mad_window,
+    ) = trading_day_mad_score(
+        daily,
+        "speculation",
+        window_days=mad_window,
         min_history_days=min_mad_days,
     )
 
@@ -264,9 +443,10 @@ def add_volume_price_features(
         daily["log_open_interest_median_past"],
         daily["log_open_interest_mad_past"],
         daily["open_interest_mad_score"],
-    ) = mad_score(
-        daily["log_open_interest"],
-        window=mad_window,
+    ) = trading_day_mad_score(
+        daily,
+        "log_open_interest",
+        window_days=mad_window,
         min_history_days=min_mad_days,
     )
 
@@ -408,6 +588,14 @@ def save_factor_outputs(
 
     base_columns = [
         "date",
+        "trading_day",
+        "trading_day_id",
+        "bar_index_in_trading_day",
+        "bars_in_trading_day",
+        "trading_day_start_datetime",
+        "bar_start_datetime",
+        "bar_end_datetime",
+        "source_minutes",
         "open",
         "close",
         "high",
