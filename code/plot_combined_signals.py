@@ -10,6 +10,9 @@ PROJECT_ROOT = CODE_DIR.parent
 RESULTS_DIR = PROJECT_ROOT / "results"
 DEFAULT_RUNS_DIR = RESULTS_DIR
 DEFAULT_OUTPUT_DIR = RESULTS_DIR / "combined"
+DEFAULT_FACTOR_IDS = ("11", "12", "13", "14")
+DEFAULT_CONFIDENCE_WINDOW_DAYS = 10
+CONFIDENCE_FULL_SIGNAL_DAYS = 4
 
 os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(PROJECT_ROOT / ".cache"))
@@ -128,6 +131,10 @@ CLICK_INFO_SCRIPT = """
         var factorLabel = point.customdata[1];
         var factorName = point.customdata[2];
         var factorValue = point.customdata[4] || '';
+        var confidenceScore = point.customdata[5] || '';
+        var confidenceLevel = point.customdata[6] || '';
+        var confidenceSignalDays = point.customdata[7] || '';
+        var confidenceRecentDates = point.customdata[8] || '';
         var closeText = Number(point.y).toLocaleString(
             undefined,
             {maximumFractionDigits: 4}
@@ -138,7 +145,11 @@ CLICK_INFO_SCRIPT = """
             '&nbsp;&nbsp; <strong>Factor:</strong> ' + factorLabel +
             '&nbsp;&nbsp; <strong>Name:</strong> ' + factorName +
             '&nbsp;&nbsp; <strong>Close:</strong> ' + closeText +
-            (factorValue ? '&nbsp;&nbsp; <strong>Factor value:</strong> ' + factorValue : '')
+            (factorValue ? '&nbsp;&nbsp; <strong>Factor value:</strong> ' + factorValue : '') +
+            (confidenceScore ? '&nbsp;&nbsp; <strong>Confidence:</strong> ' + confidenceScore : '') +
+            (confidenceLevel ? '&nbsp;&nbsp; <strong>Level:</strong> ' + confidenceLevel : '') +
+            (confidenceSignalDays ? '&nbsp;&nbsp; <strong>Signal days:</strong> ' + confidenceSignalDays : '') +
+            (confidenceRecentDates ? '&nbsp;&nbsp; <strong>Recent dates:</strong> ' + confidenceRecentDates : '')
         );
         resizeGraph();
 
@@ -508,7 +519,11 @@ DASHBOARD_HTML_TEMPLATE = """<!doctype html>
                         "factor=%{{customdata[1]}}<br>" +
                         "name=%{{customdata[2]}}<br>" +
                         "close=%{{y:.4f}}<br>" +
-                        "factor value=%{{customdata[4]}}" +
+                        "factor value=%{{customdata[4]}}<br>" +
+                        "confidence=%{{customdata[5]}}<br>" +
+                        "level=%{{customdata[6]}}<br>" +
+                        "signal days=%{{customdata[7]}}<br>" +
+                        "recent dates=%{{customdata[8]}}" +
                         "<extra></extra>"
                     )
                 }});
@@ -659,6 +674,10 @@ DASHBOARD_HTML_TEMPLATE = """<!doctype html>
             const factorLabel = point.customdata[1];
             const factorName = point.customdata[2];
             const factorValue = point.customdata[4] || "";
+            const confidenceScore = point.customdata[5] || "";
+            const confidenceLevel = point.customdata[6] || "";
+            const confidenceSignalDays = point.customdata[7] || "";
+            const confidenceRecentDates = point.customdata[8] || "";
             const closeText = formatClose(point.y);
 
             info.innerHTML = (
@@ -666,7 +685,11 @@ DASHBOARD_HTML_TEMPLATE = """<!doctype html>
                 "&nbsp;&nbsp; <strong>Factor:</strong> " + factorLabel +
                 "&nbsp;&nbsp; <strong>Name:</strong> " + factorName +
                 "&nbsp;&nbsp; <strong>Close:</strong> " + closeText +
-                (factorValue ? "&nbsp;&nbsp; <strong>Factor value:</strong> " + factorValue : "")
+                (factorValue ? "&nbsp;&nbsp; <strong>Factor value:</strong> " + factorValue : "") +
+                (confidenceScore ? "&nbsp;&nbsp; <strong>Confidence:</strong> " + confidenceScore : "") +
+                (confidenceLevel ? "&nbsp;&nbsp; <strong>Level:</strong> " + confidenceLevel : "") +
+                (confidenceSignalDays ? "&nbsp;&nbsp; <strong>Signal days:</strong> " + confidenceSignalDays : "") +
+                (confidenceRecentDates ? "&nbsp;&nbsp; <strong>Recent dates:</strong> " + confidenceRecentDates : "")
             );
 
             Plotly.relayout(graph, {{
@@ -722,6 +745,22 @@ def parse_symbols(raw_value):
     return set(symbols) or None
 
 
+def parse_factor_ids(raw_value):
+    if raw_value is None:
+        return set(DEFAULT_FACTOR_IDS)
+
+    raw_value = raw_value.strip()
+    if raw_value == "" or raw_value.upper() in {"ALL", "*"}:
+        return None
+
+    factor_ids = {
+        item.strip()
+        for item in raw_value.split(",")
+        if item.strip()
+    }
+    return factor_ids or set(DEFAULT_FACTOR_IDS)
+
+
 def parse_factor_file(path):
     match = FACTOR_FILE_PATTERN.match(path.name)
     if match is None:
@@ -734,7 +773,7 @@ def parse_factor_file(path):
     }
 
 
-def discover_factor_files(runs_dir, symbol_filter=None):
+def discover_factor_files(runs_dir, symbol_filter=None, factor_id_filter=None):
     factor_files = []
 
     for run_dir in sorted(runs_dir.iterdir()):
@@ -752,6 +791,11 @@ def discover_factor_files(runs_dir, symbol_filter=None):
             if metadata is None:
                 continue
             if symbol_filter is not None and metadata["symbol"] not in symbol_filter:
+                continue
+            if (
+                factor_id_filter is not None and
+                metadata["factor_id"] not in factor_id_filter
+            ):
                 continue
 
             factor_files.append({
@@ -832,6 +876,105 @@ def load_all_factor_data(factor_files):
         raise RuntimeError(f"no factor data could be loaded\n{error_text}")
 
     return frames, errors
+
+
+def confidence_level(signal_day_count):
+    if signal_day_count >= CONFIDENCE_FULL_SIGNAL_DAYS:
+        return "high"
+    if signal_day_count >= 2:
+        return "medium"
+    if signal_day_count >= 1:
+        return "low"
+
+    return "none"
+
+
+def format_date_list(date_values):
+    return ",".join(
+        pd.Timestamp(value).strftime("%Y-%m-%d")
+        for value in date_values
+    )
+
+
+def build_symbol_confidence_by_date(symbol_frames, lookback_days):
+    all_dates = sorted({
+        value
+        for frame in symbol_frames
+        for value in frame["date"].dropna()
+    })
+    if not all_dates:
+        return {}
+
+    signal_dates = {
+        value
+        for frame in symbol_frames
+        for value in frame.loc[frame["signal"] == 1, "date"].dropna()
+    }
+    lookback_days = max(int(lookback_days), 1)
+    confidence_by_date = {}
+
+    for index, current_date in enumerate(all_dates):
+        window_start = max(0, index - lookback_days + 1)
+        window_dates = all_dates[window_start:index + 1]
+        recent_signal_dates = [
+            value
+            for value in window_dates
+            if value in signal_dates
+        ]
+        signal_day_count = len(recent_signal_dates)
+        confidence_score = min(
+            signal_day_count / CONFIDENCE_FULL_SIGNAL_DAYS,
+            1.0,
+        )
+
+        confidence_by_date[current_date] = {
+            "confidence_score": confidence_score,
+            "confidence_signal_days": signal_day_count,
+            "confidence_level": confidence_level(signal_day_count),
+            "confidence_recent_dates": format_date_list(recent_signal_dates),
+        }
+
+    return confidence_by_date
+
+
+def add_signal_confidence(factor_frames, lookback_days):
+    output_frames = []
+    symbols = sorted({
+        frame["symbol"].iloc[0]
+        for frame in factor_frames
+    })
+
+    for symbol in symbols:
+        symbol_frames = [
+            frame
+            for frame in factor_frames
+            if frame["symbol"].iloc[0] == symbol
+        ]
+        confidence_by_date = build_symbol_confidence_by_date(
+            symbol_frames=symbol_frames,
+            lookback_days=lookback_days,
+        )
+
+        for frame in symbol_frames:
+            frame = frame.copy()
+            confidence_values = frame["date"].map(
+                lambda value: confidence_by_date.get(value, {})
+            )
+            frame["confidence_score"] = confidence_values.map(
+                lambda item: item.get("confidence_score", 0.0)
+            )
+            frame["confidence_signal_days"] = confidence_values.map(
+                lambda item: item.get("confidence_signal_days", 0)
+            )
+            frame["confidence_level"] = confidence_values.map(
+                lambda item: item.get("confidence_level", "none")
+            )
+            frame["confidence_recent_dates"] = confidence_values.map(
+                lambda item: item.get("confidence_recent_dates", "")
+            )
+            output_frames.append(frame)
+
+    return output_frames
 
 
 def build_signal_stats(factor_frames):
@@ -1035,6 +1178,18 @@ def format_factor_value(value):
     return f"{value:.6g}"
 
 
+def format_confidence_score(value):
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return ""
+
+    if pd.isna(value):
+        return ""
+
+    return f"{value:.2f}"
+
+
 def prepare_interactive_signal_points(daily):
     signals = daily[daily["signal"] == 1].dropna(subset=["date", "close"]).copy()
     if signals.empty:
@@ -1042,9 +1197,37 @@ def prepare_interactive_signal_points(daily):
 
     if "factor_value" not in signals.columns:
         signals["factor_value"] = pd.NA
+    if "confidence_score" not in signals.columns:
+        signals["confidence_score"] = pd.NA
+    if "confidence_signal_days" not in signals.columns:
+        signals["confidence_signal_days"] = 0
+    if "confidence_level" not in signals.columns:
+        signals["confidence_level"] = ""
+    if "confidence_recent_dates" not in signals.columns:
+        signals["confidence_recent_dates"] = ""
 
     signals["signal_date_text"] = signals["date"].dt.strftime("%Y-%m-%d")
     signals["factor_value_text"] = signals["factor_value"].map(format_factor_value)
+    signals["confidence_score_text"] = (
+        signals["confidence_score"]
+        .map(format_confidence_score)
+    )
+    signals["confidence_signal_days_text"] = (
+        signals["confidence_signal_days"]
+        .fillna(0)
+        .astype(int)
+        .astype(str)
+    )
+    signals["confidence_level_text"] = (
+        signals["confidence_level"]
+        .fillna("")
+        .astype(str)
+    )
+    signals["confidence_recent_dates_text"] = (
+        signals["confidence_recent_dates"]
+        .fillna("")
+        .astype(str)
+    )
 
     return signals
 
@@ -1087,6 +1270,10 @@ def plot_symbol_signals_html(symbol, frames, styles, figures_dir):
                 "factor_name",
                 "factor_id",
                 "factor_value_text",
+                "confidence_score_text",
+                "confidence_level_text",
+                "confidence_signal_days_text",
+                "confidence_recent_dates_text",
             ]
         ].to_numpy()
 
@@ -1108,7 +1295,11 @@ def plot_symbol_signals_html(symbol, frames, styles, figures_dir):
                     "factor=%{customdata[1]}<br>"
                     "name=%{customdata[2]}<br>"
                     "close=%{y:.4f}<br>"
-                    "factor value=%{customdata[4]}"
+                    "factor value=%{customdata[4]}<br>"
+                    "confidence=%{customdata[5]}<br>"
+                    "level=%{customdata[6]}<br>"
+                    "signal days=%{customdata[7]}<br>"
+                    "recent dates=%{customdata[8]}"
                     "<extra></extra>"
                 ),
             )
@@ -1225,6 +1416,10 @@ def build_dashboard_data(factor_frames, styles):
                         factor_name,
                         factor_id,
                         row["factor_value_text"],
+                        row["confidence_score_text"],
+                        row["confidence_level_text"],
+                        row["confidence_signal_days_text"],
+                        row["confidence_recent_dates_text"],
                     ]
                     for _, row in signals.iterrows()
                 ],
@@ -1274,11 +1469,16 @@ def save_dashboard_html(factor_frames, styles, figures_dir):
     return dashboard_path
 
 
-def save_outputs(factor_frames, output_dir, dpi):
+def save_outputs(factor_frames, output_dir, dpi, confidence_window_days):
     figures_dir = output_dir / "figures"
     tables_dir = output_dir / "tables"
     figures_dir.mkdir(parents=True, exist_ok=True)
     tables_dir.mkdir(parents=True, exist_ok=True)
+
+    factor_frames = add_signal_confidence(
+        factor_frames=factor_frames,
+        lookback_days=confidence_window_days,
+    )
 
     stats = build_signal_stats(factor_frames)
     stats_path = tables_dir / "combined_signal_stats.csv"
@@ -1348,10 +1548,27 @@ def main():
         help="optional comma-separated symbols, for example: PP,CU",
     )
     parser.add_argument(
+        "--factor-ids",
+        default=",".join(DEFAULT_FACTOR_IDS),
+        help=(
+            "comma-separated factor ids to plot, default: "
+            f"{','.join(DEFAULT_FACTOR_IDS)}; use ALL to plot every factor result"
+        ),
+    )
+    parser.add_argument(
         "--dpi",
         type=int,
         default=300,
         help="figure dpi, default: 300",
+    )
+    parser.add_argument(
+        "--confidence-window-days",
+        type=int,
+        default=DEFAULT_CONFIDENCE_WINDOW_DAYS,
+        help=(
+            "trading-day lookback window for display-only confidence, "
+            f"default: {DEFAULT_CONFIDENCE_WINDOW_DAYS}"
+        ),
     )
 
     args = parser.parse_args()
@@ -1364,12 +1581,14 @@ def main():
     factor_files = discover_factor_files(
         runs_dir=runs_dir,
         symbol_filter=parse_symbols(args.symbols),
+        factor_id_filter=parse_factor_ids(args.factor_ids),
     )
     factor_frames, errors = load_all_factor_data(factor_files)
     stats_path, figure_paths, html_paths, dashboard_path = save_outputs(
         factor_frames=factor_frames,
         output_dir=output_dir,
         dpi=args.dpi,
+        confidence_window_days=args.confidence_window_days,
     )
 
     print("combined signal outputs complete.")
@@ -1379,6 +1598,7 @@ def main():
     print(f"dashboard: {dashboard_path}")
     print(f"stats table: {stats_path}")
     print(f"figures dir: {output_dir / 'figures'}")
+    print(f"confidence window days: {args.confidence_window_days}")
 
     if errors:
         print("\nskipped files:")
