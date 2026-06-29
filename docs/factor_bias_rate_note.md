@@ -73,7 +73,7 @@ close_ma20_bias <= 0.08
 
 ## 4. 四个因子的对应关系
 
-### 11 price_volume_up_oi_down
+### 11 price_up_volume_oi_surge
 
 当前字段：
 
@@ -158,13 +158,13 @@ ma_bull_stack_filter
 
 均线和乖离率使用当日收盘价计算，所以信号只能在当日收盘后确认。
 
-回测或实盘映射时，应使用下一交易日仓位：
+因子脚本只生成当日收盘后确认的信号，不再在因子文件里生成下一交易日开盘方向或交易仓位。
+
+如果后续重新做回测或实盘映射，应在独立模块里使用下一交易日仓位：
 
 ```python
-trade_from_previous_signal = signal.shift(1)
+trade_signal = signal.shift(1)
 ```
-
-本项目因子里已经用 `trade_from_previous_signal` 和 `trade_open_mean_position` 表示从前一交易日信号推导出的交易日仓位。
 
 ## 7. 最小可复用代码
 
