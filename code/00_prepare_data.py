@@ -22,6 +22,8 @@ results_dir = os.path.abspath(
 # =========================
 
 symbol = SYMBOL
+day_session_start_minute = 8 * 60
+night_session_start_minute = 21 * 60
 data_path = os.path.join(project_root, "data", f"{symbol}.csv")
 daily_output_path = os.path.join(
     results_dir,
@@ -34,6 +36,58 @@ daily_output_path = os.path.join(
 # excluded_dates = pd.to_datetime(["2023-12-08", "2025-08-11", "2026-01-12"])
 
 
+def infer_trading_dates(datetimes):
+    datetimes = pd.to_datetime(datetimes)
+    minute_of_day = datetimes.dt.hour * 60 + datetimes.dt.minute
+    calendar_dates = datetimes.dt.normalize()
+
+    # 用文件里实际出现的白盘日期作为交易日历。
+    # 这样周五或节假日前夜盘会归到下一条实际交易日。
+    day_session_mask = (
+        (minute_of_day >= day_session_start_minute) &
+        (minute_of_day < night_session_start_minute)
+    )
+    trading_calendar = np.sort(
+        calendar_dates.loc[day_session_mask].unique().astype("datetime64[ns]")
+    )
+    if len(trading_calendar) == 0:
+        trading_calendar = np.sort(
+            calendar_dates.unique().astype("datetime64[ns]")
+        )
+
+    calendar_values = calendar_dates.to_numpy(dtype="datetime64[ns]")
+    trading_values = calendar_values.copy()
+    known_trading_day = calendar_dates.isin(trading_calendar).to_numpy()
+    roll_forward_mask = (
+        (minute_of_day.to_numpy() >= night_session_start_minute) |
+        ~known_trading_day
+    )
+
+    if roll_forward_mask.any():
+        roll_indices = np.flatnonzero(roll_forward_mask)
+        insert_positions = np.searchsorted(
+            trading_calendar,
+            calendar_values[roll_indices],
+            side="right",
+        )
+        mapped_mask = insert_positions < len(trading_calendar)
+
+        trading_values[roll_indices[mapped_mask]] = (
+            trading_calendar[insert_positions[mapped_mask]]
+        )
+
+        if (~mapped_mask).any():
+            fallback_dates = (
+                pd.to_datetime(calendar_values[roll_indices[~mapped_mask]]) +
+                pd.offsets.BDay(1)
+            )
+            trading_values[roll_indices[~mapped_mask]] = (
+                fallback_dates.to_numpy(dtype="datetime64[ns]")
+            )
+
+    return pd.Series(pd.to_datetime(trading_values), index=datetimes.index)
+
+
 # =========================
 # 1. 读取分钟数据
 # =========================
@@ -41,7 +95,7 @@ daily_output_path = os.path.join(
 df = pd.read_csv(data_path)
 df["datetime"] = pd.to_datetime(df["datetime"])
 df = df.sort_values("datetime").reset_index(drop=True)
-df["date"] = df["datetime"].dt.date
+df["date"] = infer_trading_dates(df["datetime"])
 
 
 # =========================
