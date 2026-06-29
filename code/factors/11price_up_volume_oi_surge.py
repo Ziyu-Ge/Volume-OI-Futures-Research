@@ -193,10 +193,9 @@ daily["ma_bull_stack_filter"] = (
 # 3. 5 日持仓变化率相对历史窗口明显异常；
 # 4. 成交量相对历史窗口明显放大。
 # 5. 均线呈 ma5 > ma10 > ma20 多头排列，且短中期均线乖离率达标。
-# 虽然 factor_name 保留了 oi_down 命名，但当前代码实际使用绝对值条件，
-# 因此这里捕捉的是“持仓变化异常”，不是单纯的持仓下降。
+# 这里捕捉的是“持仓变化异常”，不是单纯的持仓下降。
 
-daily["price_volume_up_oi_down_signal"] = 0
+daily["price_up_volume_oi_surge_signal"] = 0
 daily.loc[
     (
         daily["close_rank_20"] >= price_rank_threshold
@@ -209,7 +208,7 @@ daily.loc[
     ) & (
         daily["ma_bull_stack_filter"]
     ),
-    "price_volume_up_oi_down_signal",
+    "price_up_volume_oi_surge_signal",
 ] = 1
 
 # =========================
@@ -231,7 +230,7 @@ daily["next_day_open_vs_day_mean"] = (
 )
 daily["signal_next_day_position"] = np.nan
 
-signal_mask = daily["price_volume_up_oi_down_signal"] == 1
+signal_mask = daily["price_up_volume_oi_surge_signal"] == 1
 next_day_long_mask = (
     signal_mask &
     (daily["next_day_open"] > daily["day_mean_price"])
@@ -254,7 +253,7 @@ daily["open_vs_previous_day_mean"] = (
     daily["open"] - daily["previous_day_mean_price"]
 )
 daily["trade_from_previous_signal"] = (
-    daily["price_volume_up_oi_down_signal"]
+    daily["price_up_volume_oi_surge_signal"]
     .shift(1)
     .fillna(0)
     .astype(int)
@@ -326,7 +325,7 @@ save_factor_outputs(
     factor_id=factor_id,
     factor_name=factor_name,
     factor_value_column="price_volume_oi_score",
-    signal_column="price_volume_up_oi_down_signal",
+    signal_column="price_up_volume_oi_surge_signal",
     position_scale_on_signal=signal_position_scale,
     feature_columns=feature_columns,
     figure_feature_columns=[

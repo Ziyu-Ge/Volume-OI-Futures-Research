@@ -12,12 +12,12 @@ DATA_DIR = PROJECT_ROOT / "data"
 RESULTS_DIR = PROJECT_ROOT / "results"
 
 FACTOR_ID = "11"
-FACTOR_NAME = "price_volume_up_oi_down"
-FACTOR_SCRIPT = CODE_DIR / "factors" / "11price_volume_up_oi_down.py"
+FACTOR_NAME = "price_up_volume_oi_surge"
+FACTOR_SCRIPT = CODE_DIR / "factors" / "11price_up_volume_oi_surge.py"
 PREPARE_SCRIPT = CODE_DIR / "00_prepare_data.py"
 BACKTEST_SCRIPT = CODE_DIR / "backtest" / "backtest_sum.py"
 DEFAULT_OUTPUT_DIR = (
-    RESULTS_DIR / "11_price_volume_up_oi_down_all_symbols"
+    RESULTS_DIR / "11_price_up_volume_oi_surge_all_symbols"
 )
 
 os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
