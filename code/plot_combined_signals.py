@@ -200,12 +200,16 @@ DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         .sidebar {{
             display: flex;
             flex-direction: column;
+            height: 100%;
             min-width: 0;
+            min-height: 0;
+            overflow: hidden;
             border-right: 1px solid #d9dee8;
             background: #ffffff;
         }}
 
         .sidebar-header {{
+            flex: 0 0 auto;
             padding: 14px 14px 10px;
             border-bottom: 1px solid #e5e7eb;
         }}
@@ -241,9 +245,12 @@ DASHBOARD_HTML_TEMPLATE = """<!doctype html>
         }}
 
         .symbol-list {{
-            flex: 1;
+            flex: 1 1 auto;
+            height: 0;
             min-height: 0;
-            overflow: auto;
+            overflow-x: hidden;
+            overflow-y: auto;
+            overscroll-behavior: contain;
             padding: 8px;
         }}
 
@@ -366,7 +373,9 @@ DASHBOARD_HTML_TEMPLATE = """<!doctype html>
             }}
 
             .sidebar {{
+                height: 100%;
                 min-height: 0;
+                overflow: hidden;
                 border-right: 0;
                 border-bottom: 1px solid #d9dee8;
             }}
