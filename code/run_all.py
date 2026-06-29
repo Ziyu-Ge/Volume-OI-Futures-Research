@@ -11,15 +11,10 @@ CODE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CODE_DIR.parent
 DATA_DIR = PROJECT_ROOT / "data"
 FACTOR_DIR = CODE_DIR / "factors"
-BACKTEST_DIR = CODE_DIR / "backtest"
 
 FACTOR_UTILS_FILENAME = "volume_price_factor_utils.py"
 PREPARE_SCRIPT = CODE_DIR / "00_prepare_data.py"
 EDA_SCRIPT = CODE_DIR / "eda.py"
-BACKTEST_SCRIPTS = [
-    ("sum", BACKTEST_DIR / "backtest_sum.py"),
-    ("multi", BACKTEST_DIR / "backtest_multi.py"),
-]
 
 RUN_SCRIPT_CODE = textwrap.dedent(
     """
@@ -185,25 +180,6 @@ def run_factors(symbol, env, factor_scripts):
         run_script(factor_script, symbol, env)
 
 
-def run_backtests(symbol, env, backtest_choice):
-    ran_backtest = False
-
-    for backtest_name, backtest_script in BACKTEST_SCRIPTS:
-        if backtest_choice != "all" and backtest_choice != backtest_name:
-            continue
-
-        if not backtest_script.exists():
-            if backtest_choice == backtest_name:
-                raise FileNotFoundError(f"回测脚本不存在：{backtest_script}")
-            continue
-
-        run_script(backtest_script, symbol, env)
-        ran_backtest = True
-
-    if not ran_backtest:
-        raise FileNotFoundError("没有找到可运行的回测脚本。")
-
-
 def run_symbol(symbol, args, factor_scripts, factor_ids):
     env = build_env(symbol, factor_ids)
 
@@ -216,13 +192,10 @@ def run_symbol(symbol, args, factor_scripts, factor_ids):
     if not args.skip_factors:
         run_factors(symbol, env, factor_scripts)
 
-    if not args.skip_backtest:
-        run_backtests(symbol, env, args.backtest)
-
 
 def main():
     parser = argparse.ArgumentParser(
-        description="批量运行全部或指定品种的全部因子和回测。"
+        description="批量运行全部或指定品种的全部因子。"
     )
     parser.add_argument(
         "--symbols",
@@ -245,20 +218,9 @@ def main():
         help="跳过因子计算。",
     )
     parser.add_argument(
-        "--skip-backtest",
-        action="store_true",
-        help="跳过回测。",
-    )
-    parser.add_argument(
         "--run-eda",
         action="store_true",
         help="额外运行 EDA 脚本。默认不运行。",
-    )
-    parser.add_argument(
-        "--backtest",
-        choices=["all", "sum", "multi"],
-        default="all",
-        help="选择运行哪类回测，默认 all；不存在的回测脚本会在 all 模式下自动跳过。",
     )
     parser.add_argument(
         "--keep-going",

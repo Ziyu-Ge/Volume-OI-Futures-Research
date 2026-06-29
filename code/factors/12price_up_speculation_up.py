@@ -1,5 +1,3 @@
-import numpy as np
-
 from volume_price_factor_utils import (
     SYMBOL,
     load_daily,
@@ -51,12 +49,6 @@ mad_epsilon = 1e-12
 # 当过去有效投机度样本少于该值时，不计算 MAD score，避免早期样本太短导致误判。
 min_history_days = 5
 
-# 触发信号后的次一交易日，根据开盘价和前一交易日均值决定方向。
-# 这里的均值使用日线 OHLC4 均价，避免依赖不同品种成交额乘数。
-# 公共 position 字段保留为 1.0，真实回测方向写入 trade_open_mean_position。
-signal_position_scale = 1
-
-
 # =========================
 # 1. 读取日频数据
 # =========================
@@ -68,8 +60,7 @@ daily = load_daily(symbol)
 # 2. 计算价格和持仓量均线条件
 # =========================
 # 注意：价格均线包含今天的收盘价，持仓量均线包含今天的持仓量。
-# 这和原实现一致。若之后用于真实交易或回测，仍应在回测端使用 signal.shift(1)
-# 产生下一交易日仓位，避免用当天收盘后才确认的信号交易当天。
+# 这和原实现一致；信号在当天收盘后确认，后续交易映射应独立处理。
 
 daily["daily_return"] = daily["close"].pct_change()
 
@@ -166,80 +157,11 @@ daily["price_up_speculation_up_signal"] = (
 
 
 # =========================
-# 5. 生成信号次日开盘方向
-# =========================
-# 信号在当天收盘后确认，因此只从次一交易日开始交易。
-# 若次日开盘价高于信号日 OHLC4 均价，次日做多；
-# 若次日开盘价低于信号日 OHLC4 均价，次日做空；
-# 若价格刚好相等或缺少均值，则次日空仓。
-
-daily["day_mean_price"] = (
-    daily[["open", "high", "low", "close"]]
-    .mean(axis=1)
-)
-
-daily["next_day_open"] = daily["open"].shift(-1)
-daily["next_day_open_vs_day_mean"] = (
-    daily["next_day_open"] - daily["day_mean_price"]
-)
-daily["signal_next_day_position"] = np.nan
-
-signal_mask = daily["price_up_speculation_up_signal"] == 1
-next_day_long_mask = (
-    signal_mask &
-    (daily["next_day_open"] > daily["day_mean_price"])
-)
-next_day_short_mask = (
-    signal_mask &
-    (daily["next_day_open"] < daily["day_mean_price"])
-)
-next_day_flat_mask = (
-    signal_mask &
-    ~(next_day_long_mask | next_day_short_mask)
-)
-
-daily.loc[next_day_long_mask, "signal_next_day_position"] = 1.0
-daily.loc[next_day_short_mask, "signal_next_day_position"] = -1.0
-daily.loc[next_day_flat_mask, "signal_next_day_position"] = 0.0
-
-daily["previous_day_mean_price"] = daily["day_mean_price"].shift(1)
-daily["open_vs_previous_day_mean"] = (
-    daily["open"] - daily["previous_day_mean_price"]
-)
-daily["trade_from_previous_signal"] = (
-    daily["price_up_speculation_up_signal"]
-    .shift(1)
-    .fillna(0)
-    .astype(int)
-)
-
-daily["trade_open_mean_position"] = 1.0
-trade_signal_mask = daily["trade_from_previous_signal"] == 1
-trade_long_mask = (
-    trade_signal_mask &
-    (daily["open"] > daily["previous_day_mean_price"])
-)
-trade_short_mask = (
-    trade_signal_mask &
-    (daily["open"] < daily["previous_day_mean_price"])
-)
-trade_flat_mask = (
-    trade_signal_mask &
-    ~(trade_long_mask | trade_short_mask)
-)
-
-daily.loc[trade_long_mask, "trade_open_mean_position"] = 1.0
-daily.loc[trade_short_mask, "trade_open_mean_position"] = -1.0
-daily.loc[trade_flat_mask, "trade_open_mean_position"] = 0.0
-
-
-# =========================
-# 6. 保存标准化结果
+# 5. 保存标准化结果
 # =========================
 # factor_value 仍然使用 speculation_mad_score，和原实现一致。
 # feature_columns 会进入因子每日表、信号事件表和汇总表；
-# 公共函数会统一生成 factor_id、factor_name、signal、position、position_scale。
-# backtest_sum.py 会优先使用 trade_open_mean_position 作为交易当天仓位。
+# 公共函数会统一生成 factor_id、factor_name 和 signal。
 
 feature_columns = [
     "daily_return",
@@ -259,14 +181,6 @@ feature_columns = [
     "speculation_median_past",
     "speculation_mad_past",
     "speculation_mad_score",
-    "day_mean_price",
-    "next_day_open",
-    "next_day_open_vs_day_mean",
-    "signal_next_day_position",
-    "previous_day_mean_price",
-    "open_vs_previous_day_mean",
-    "trade_from_previous_signal",
-    "trade_open_mean_position",
 ]
 
 result = save_factor_outputs(
@@ -276,7 +190,6 @@ result = save_factor_outputs(
     factor_name=factor_name,
     factor_value_column="speculation_mad_score",
     signal_column="price_up_speculation_up_signal",
-    position_scale_on_signal=signal_position_scale,
     feature_columns=feature_columns,
     figure_feature_columns=[
         "price_ma_5",
@@ -290,7 +203,7 @@ result = save_factor_outputs(
 
 
 # =========================
-# 7. 补充因子参数到汇总表
+# 6. 补充因子参数到汇总表
 # =========================
 # 公共函数已经生成整体汇总表；这里补上本因子特有参数和原汇总中关注的统计量。
 # 这样之后只看 summary 文件，也能知道价格均线窗口、持仓量均线窗口、

@@ -300,8 +300,6 @@ def build_signal_table(daily, factor_id, factor_name, feature_columns):
         "signal_date",
         "signal_close",
         "factor_value",
-        "position",
-        "position_scale",
     ]
     output_columns = base_columns.copy()
 
@@ -369,10 +367,8 @@ def save_factor_outputs(
     factor_name,
     factor_value_column,
     signal_column,
-    position_scale_on_signal,
     feature_columns,
     figure_feature_columns=None,
-    signal_holding_days=1,
     results_dir=None,
 ):
     daily = daily.copy()
@@ -381,24 +377,6 @@ def save_factor_outputs(
     daily["factor_name"] = factor_name
     daily["factor_value"] = daily[factor_value_column]
     daily["signal"] = daily[signal_column].fillna(0).astype(int)
-
-    signal_holding_days = max(int(signal_holding_days), 1)
-    position_mask = daily["signal"] == 1
-    if signal_holding_days > 1:
-        position_mask = (
-            daily["signal"]
-            .rolling(window=signal_holding_days, min_periods=1)
-            .max()
-            .fillna(0)
-            .astype(int)
-            == 1
-        )
-
-    daily["position"] = 1.0
-    daily.loc[position_mask, "position"] = position_scale_on_signal
-
-    # Backward-compatible alias for older backtest/output code.
-    daily["position_scale"] = daily["position"]
 
     output_root = get_results_dir(results_dir)
     tables_dir = os.path.join(output_root, "tables")
@@ -448,8 +426,6 @@ def save_factor_outputs(
 
     for col in base_columns + feature_columns + [
         "signal",
-        "position",
-        "position_scale",
     ]:
         if col in daily.columns and col not in output_columns:
             output_columns.append(col)

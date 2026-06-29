@@ -15,7 +15,6 @@ FACTOR_ID = "14"
 FACTOR_NAME = "uptrend_crowded_chase"
 FACTOR_SCRIPT = CODE_DIR / "factors" / "14uptrend_crowded_chase.py"
 PREPARE_SCRIPT = CODE_DIR / "00_prepare_data.py"
-BACKTEST_SCRIPT = CODE_DIR / "backtest" / "backtest_sum.py"
 DEFAULT_OUTPUT_DIR = (
     RESULTS_DIR / "14_uptrend_crowded_chase_all_symbols"
 )
@@ -25,13 +24,7 @@ os.environ.setdefault("XDG_CACHE_HOME", str(PROJECT_ROOT / ".cache"))
 (PROJECT_ROOT / ".matplotlib").mkdir(exist_ok=True)
 (PROJECT_ROOT / ".cache").mkdir(exist_ok=True)
 
-import matplotlib
-import numpy as np
 import pandas as pd
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-from matplotlib.ticker import PercentFormatter
 
 RUN_SCRIPT_CODE = textwrap.dedent(
     """
@@ -135,181 +128,46 @@ def run_script(script_path, symbol, env):
     )
 
 
-def read_backtest_summary(symbol, output_dir):
+def read_factor_summary(symbol, output_dir):
     summary_path = (
         output_dir
         / "tables"
-        / "backtest"
-        / f"{symbol}_{FACTOR_ID}_{FACTOR_NAME}_long_only_simple_summary.csv"
+        / "summary"
+        / f"{symbol}_{FACTOR_ID}_{FACTOR_NAME}_summary.csv"
     )
     if not summary_path.exists():
         return None
 
     summary = pd.read_csv(summary_path)
-    summary.insert(0, "symbol", symbol)
+    if "symbol" not in summary.columns:
+        summary.insert(0, "symbol", symbol)
     return summary
-
-
-def build_wide_summary(combined_summary):
-    metric_columns = [
-        "total_return",
-        "annual_return",
-        "max_drawdown",
-        "annual_volatility",
-        "sharpe",
-        "signal_days",
-        "signal_ratio",
-    ]
-    wide = combined_summary.pivot_table(
-        index="symbol",
-        columns="strategy",
-        values=metric_columns,
-        aggfunc="first",
-    )
-    wide.columns = [
-        f"{strategy}_{metric}"
-        for metric, strategy in wide.columns
-    ]
-    wide = wide.reset_index()
-
-    base_prefix = "base_long_only_simple"
-    strategy_prefix = "factor_position_simple"
-    for metric in [
-        "total_return",
-        "annual_return",
-        "max_drawdown",
-        "annual_volatility",
-        "sharpe",
-    ]:
-        base_col = f"{base_prefix}_{metric}"
-        strategy_col = f"{strategy_prefix}_{metric}"
-        if base_col not in wide.columns or strategy_col not in wide.columns:
-            continue
-
-        wide[f"excess_{metric}"] = wide[strategy_col] - wide[base_col]
-
-    sort_col = "excess_total_return"
-    if sort_col in wide.columns:
-        wide = wide.sort_values(sort_col, ascending=False)
-    else:
-        wide = wide.sort_values("symbol")
-
-    return wide.reset_index(drop=True)
-
-
-def save_summary_figure(wide_summary, output_dir):
-    strategy_return_col = "factor_position_simple_total_return"
-    base_return_col = "base_long_only_simple_total_return"
-    excess_return_col = "excess_total_return"
-
-    required_columns = {
-        "symbol",
-        strategy_return_col,
-        base_return_col,
-        excess_return_col,
-    }
-    if not required_columns.issubset(wide_summary.columns):
-        return None
-
-    plot_data = wide_summary.sort_values(excess_return_col)
-    y_positions = np.arange(len(plot_data))
-    figure_height = max(8, len(plot_data) * 0.28 + 2)
-
-    fig, axes = plt.subplots(
-        ncols=2,
-        figsize=(16, figure_height),
-        gridspec_kw={"width_ratios": [1.4, 1]},
-    )
-
-    axes[0].barh(
-        y_positions - 0.18,
-        plot_data[base_return_col],
-        height=0.36,
-        label="Base Long",
-        color="#6b7280",
-    )
-    axes[0].barh(
-        y_positions + 0.18,
-        plot_data[strategy_return_col],
-        height=0.36,
-        label="Factor Strategy",
-        color="#2563eb",
-    )
-    axes[0].set_yticks(y_positions)
-    axes[0].set_yticklabels(plot_data["symbol"])
-    axes[0].xaxis.set_major_formatter(PercentFormatter(1.0))
-    axes[0].set_title("Total Return")
-    axes[0].grid(axis="x", alpha=0.25)
-    axes[0].legend(loc="lower right")
-
-    excess_colors = np.where(
-        plot_data[excess_return_col] >= 0,
-        "#16a34a",
-        "#dc2626",
-    )
-    axes[1].barh(
-        y_positions,
-        plot_data[excess_return_col],
-        color=excess_colors,
-    )
-    axes[1].set_yticks(y_positions)
-    axes[1].set_yticklabels([])
-    axes[1].xaxis.set_major_formatter(PercentFormatter(1.0))
-    axes[1].set_title("Excess Total Return")
-    axes[1].axvline(0, color="#111827", linewidth=0.8)
-    axes[1].grid(axis="x", alpha=0.25)
-
-    fig.suptitle(
-        f"Factor {FACTOR_ID}: {FACTOR_NAME} All Symbols Backtest Summary",
-        fontsize=14,
-    )
-    fig.tight_layout(rect=[0, 0, 1, 0.98])
-
-    figure_path = (
-        output_dir
-        / "figures"
-        / "summary"
-        / f"all_symbols_{FACTOR_ID}_{FACTOR_NAME}_summary.png"
-    )
-    figure_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(figure_path, dpi=300)
-    plt.close(fig)
-
-    return figure_path
 
 
 def save_combined_summaries(symbols, output_dir):
     summaries = []
     for symbol in symbols:
-        summary = read_backtest_summary(symbol, output_dir)
+        summary = read_factor_summary(symbol, output_dir)
         if summary is not None:
             summaries.append(summary)
 
     if not summaries:
-        raise FileNotFoundError("没有找到可汇总的 14 号因子回测 summary。")
+        raise FileNotFoundError("没有找到可汇总的 14 号因子 summary。")
 
     combined_summary = pd.concat(summaries, ignore_index=True)
-    wide_summary = build_wide_summary(combined_summary)
+    combined_summary = combined_summary.sort_values("symbol")
 
     summary_dir = output_dir / "tables" / "summary"
     summary_dir.mkdir(parents=True, exist_ok=True)
 
-    combined_summary_path = (
+    summary_path = (
         summary_dir
-        / f"all_symbols_{FACTOR_ID}_{FACTOR_NAME}_backtest_summary_long.csv"
+        / f"all_symbols_{FACTOR_ID}_{FACTOR_NAME}_summary.csv"
     )
-    wide_summary_path = (
-        summary_dir
-        / f"all_symbols_{FACTOR_ID}_{FACTOR_NAME}_backtest_summary.csv"
-    )
-    combined_summary.to_csv(combined_summary_path, index=False)
-    wide_summary.to_csv(wide_summary_path, index=False)
-    figure_path = save_summary_figure(wide_summary, output_dir)
+    combined_summary.to_csv(summary_path, index=False)
 
     return {
-        "combined_summary_path": combined_summary_path,
-        "wide_summary_path": wide_summary_path,
-        "figure_path": figure_path,
+        "summary_path": summary_path,
         "summary_count": len(summaries),
     }
 
@@ -322,13 +180,11 @@ def run_symbol(symbol, args, output_dir):
             run_script(PREPARE_SCRIPT, symbol, env)
         if not args.skip_factor:
             run_script(FACTOR_SCRIPT, symbol, env)
-        if not args.skip_backtest:
-            run_script(BACKTEST_SCRIPT, symbol, env)
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="运行全部品种的 14 号因子回测，并输出独立汇总目录。"
+        description="运行全部品种的 14 号因子，并输出独立汇总目录。"
     )
     parser.add_argument(
         "--symbols",
@@ -345,7 +201,7 @@ def main():
     parser.add_argument(
         "--collect-only",
         action="store_true",
-        help="不重新运行脚本，只基于结果目录中现有 14 号因子输出生成汇总。",
+        help="不重新运行脚本，只基于结果目录中现有 14 号因子 summary 生成汇总。",
     )
     parser.add_argument(
         "--skip-prepare",
@@ -356,11 +212,6 @@ def main():
         "--skip-factor",
         action="store_true",
         help="跳过 14 号因子计算。",
-    )
-    parser.add_argument(
-        "--skip-backtest",
-        action="store_true",
-        help="跳过回测，只基于结果目录中已有回测输出汇总。",
     )
     parser.add_argument(
         "--keep-going",
@@ -395,10 +246,7 @@ def main():
     print("\n全部任务完成。", flush=True)
     print(f"成功处理品种数量：{len(symbols) - len(failures)}", flush=True)
     print(f"汇总品种数量：{summary_info['summary_count']}", flush=True)
-    print(f"汇总表：{summary_info['wide_summary_path']}", flush=True)
-    print(f"长表汇总：{summary_info['combined_summary_path']}", flush=True)
-    if summary_info["figure_path"] is not None:
-        print(f"汇总图：{summary_info['figure_path']}", flush=True)
+    print(f"汇总表：{summary_info['summary_path']}", flush=True)
 
     if failures:
         print(f"\n失败品种数量：{len(failures)}", flush=True)
