@@ -10,7 +10,7 @@
 
 当价格已经处在近期偏高位置，同时成交量放大、持仓量剧烈变化，说明**市场交易活跃度和资金分歧明显上升，可能出现短期趋势延续或反转机会**。
 
-计算公式：
+### 计算公式：
 
 - `ret_5 = close_t / close_{t-5} - 1`
 - `close_rank_20 = mean(close_{t-i} <= close_t), i = 1..30`，最少 8 个历史样本。注：字段名为 `close_rank_20`，脚本实际窗口为 30 日。
@@ -25,24 +25,24 @@
 - `ma10_ma20_bias = ma10 / ma20 - 1`
 - `price_volume_oi_score = fillna(close_rank_20, 0) + max(ret_5, 0) + max(oi_change_5_rate_mad_abs_score, 0) + max(volume_mad_score, 0)`
 
-筛选条件：
+### 筛选条件：
 
-    **价格**
+**价格**
 
-    - `ma5 > ma10 > ma20`：要求短中期均线呈多头排列，确认价格趋势方向向上。
-    - `ma5 > ma120`：要求短期均线高于长期均线，过滤掉长期趋势仍偏弱的反弹。
-    - `ma5_ma10_bias >= 0.01`：要求 5 日均线相对 10 日均线至少拉开 1%，避免均线刚刚缠绕时误触发。
-    - `ma10_ma20_bias >= 0.01`：要求 10 日均线相对 20 日均线至少拉开 1%，确认中短期趋势有一定斜率。
-    - `close_rank_20 >= 0.90`：要求收盘价处在近期高位，确认价格已经进入偏强区域。
-    - `ret_5 > 0`：要求过去 5 日价格上涨，避免把高位但已经转弱的样本纳入信号。
+- `ma5 > ma10 > ma20`：要求短中期均线呈多头排列，确认价格趋势方向向上。
+- `ma5 > ma120`：要求短期均线高于长期均线，过滤掉长期趋势仍偏弱的反弹。
+- `ma5_ma10_bias >= 0.01`：要求 5 日均线相对 10 日均线至少拉开 1%，避免均线刚刚缠绕时误触发。
+- `ma10_ma20_bias >= 0.01`：要求 10 日均线相对 20 日均线至少拉开 1%，确认中短期趋势有一定斜率。
+- `close_rank_20 >= 0.90`：要求收盘价处在近期高位，确认价格已经进入偏强区域。
+- `ret_5 > 0`：要求过去 5 日价格上涨，避免把高位但已经转弱的样本纳入信号。
 
-    **成交量**
+**成交量**
 
-    - `volume_mad_score >= 1.0`：要求成交量相对过去窗口明显放大，确认市场交易活跃度提升。
+- `volume_mad_score >= 1.0`：要求成交量相对过去窗口明显放大，确认市场交易活跃度提升。
 
-    **持仓量**
+**持仓量**
 
-    - `oi_change_5_rate_mad_abs_score >= 1.0`：要求 5 日持仓变化率相对历史波动明显异常，捕捉持仓层面的剧烈变化。
+- `oi_change_5_rate_mad_abs_score >= 1.0`：要求 5 日持仓变化率相对历史波动明显异常，捕捉持仓层面的剧烈变化。
 
 
 ## 12 price_up_speculation_up
@@ -51,7 +51,7 @@
 
 这个因子把价格多头趋势、**持仓量多头排列**和**投机度异常**升高放在一起判断。构造重点是识别价格已经走强后，短期投机交易进一步升温的阶段。
 
-计算公式：
+### 计算公式：
 
 - `speculation = log(volume / open_interest)`
 - `maN = mean(close_{t-N+1:t})`
@@ -62,7 +62,7 @@
 - `speculation_mad_score = (speculation_t - median(speculation_{t-10:t-1})) / (1.4826 * MAD(speculation_{t-10:t-1}) + 1e-12)`，最少 5 个历史样本。
 - `factor_value = speculation_mad_score`
 
-筛选条件：
+### 筛选条件：
 
 **价格**
 
@@ -85,7 +85,7 @@
 
 这个因子刻画价格趋势仍强，但**持仓量在近期高位开始下降**的状态。它更像是在上涨过程中**寻找持仓背离或高位减仓迹象**。
 
-计算公式：
+### 计算公式：
 
 - `maN = mean(close_{t-N+1:t})`
 - `ma5_ma10_bias = ma5 / ma10 - 1`
@@ -97,7 +97,7 @@
 - `log_open_interest_mad_score = (log_open_interest_t - median(log_open_interest_{t-10:t-1})) / (1.4826 * MAD(log_open_interest_{t-10:t-1}) + 1e-12)`，最少 5 个历史样本。
 - `factor_value = log_open_interest_mad_score`
 
-筛选条件：
+### 筛选条件：
 
 **价格**
 
@@ -117,7 +117,7 @@
 
 这个因子用价格高位上涨、**持仓继续增加**以及**成交量或振幅异常**来刻画**追涨拥挤**。它关注的是趋势上行后，资金继续追入并伴随交易拥挤的状态。
 
-计算公式：
+### 计算公式：
 
 - `ret_5 = close_t / close_{t-5} - 1`
 - `log_open_interest = log(open_interest)`
@@ -134,7 +134,7 @@
 - `ma10_ma20_bias = ma10 / ma20 - 1`
 - `crowded_chase_score = fillna(close_rank_20, 0) + max(open_interest_mad_score, 0) + 0.5 * max(volume_mad_score, 0) + 0.5 * max(range_mad_score, 0)`
 
-筛选条件：
+### 筛选条件：
 
 **价格**
 
