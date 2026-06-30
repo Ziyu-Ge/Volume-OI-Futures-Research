@@ -183,6 +183,47 @@ def positive_part(series):
     return series.clip(lower=0).fillna(0)
 
 
+def add_price_ma_features(
+    daily,
+    ma_gap_threshold,
+    short_window=5,
+    mid_window=10,
+    long_window=20,
+    trend_window=120,
+):
+    daily = daily.copy()
+
+    for window in [short_window, mid_window, long_window, trend_window]:
+        daily[f"ma{window}"] = (
+            daily["close"]
+            .rolling(window=window, min_periods=window)
+            .mean()
+        )
+
+    daily["is_ma_bullish"] = (
+        (daily[f"ma{short_window}"] > daily[f"ma{mid_window}"]) &
+        (daily[f"ma{mid_window}"] > daily[f"ma{long_window}"])
+    ).astype(int)
+
+    daily["ma5_ma10_bias"] = (
+        daily[f"ma{short_window}"] / daily[f"ma{mid_window}"] - 1
+    )
+    daily["ma10_ma20_bias"] = (
+        daily[f"ma{mid_window}"] / daily[f"ma{long_window}"] - 1
+    )
+    daily["close_ma20_bias"] = (
+        daily["close"] / daily[f"ma{long_window}"] - 1
+    )
+    daily["ma_bull_stack_filter"] = (
+        (daily[f"ma{short_window}"] > daily[f"ma{mid_window}"]) &
+        (daily[f"ma{mid_window}"] > daily[f"ma{long_window}"]) &
+        (daily["ma5_ma10_bias"] >= ma_gap_threshold) &
+        (daily["ma10_ma20_bias"] >= ma_gap_threshold)
+    )
+
+    return daily
+
+
 def add_volume_price_features(
     daily,
     price_rank_window=20,

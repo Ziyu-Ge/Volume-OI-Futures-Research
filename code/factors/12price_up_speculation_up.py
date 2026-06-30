@@ -1,5 +1,6 @@
 from volume_price_factor_utils import (
     SYMBOL,
+    add_price_ma_features,
     load_daily,
     mad_score,
     parse_factor_script_metadata,
@@ -17,10 +18,12 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 
 # 价格均线多头排列窗口。
 # ma5 > ma10 > ma20 表示短期价格均线高于中期，中期高于长期；
+# ma5 > ma120 表示价格中长期趋势仍然偏强；
 # 这是原因子里判断“价格已经偏强”的第一层条件。
 ma_short_window = 5
 ma_mid_window = 10
 ma_long_window = 20
+ma_trend_window = 120
 ma_gap_threshold = 0.01
 
 # 持仓量均线窗口。
@@ -64,37 +67,15 @@ daily = load_daily(symbol)
 
 daily["daily_return"] = daily["close"].pct_change()
 
-daily["price_ma_5"] = (
-    daily["close"]
-    .rolling(window=ma_short_window, min_periods=ma_short_window)
-    .mean()
+daily = add_price_ma_features(
+    daily,
+    ma_gap_threshold=ma_gap_threshold,
+    short_window=ma_short_window,
+    mid_window=ma_mid_window,
+    long_window=ma_long_window,
+    trend_window=ma_trend_window,
 )
-daily["price_ma_10"] = (
-    daily["close"]
-    .rolling(window=ma_mid_window, min_periods=ma_mid_window)
-    .mean()
-)
-daily["price_ma_20"] = (
-    daily["close"]
-    .rolling(window=ma_long_window, min_periods=ma_long_window)
-    .mean()
-)
-
-daily["is_ma_bullish"] = (
-    (daily["price_ma_5"] > daily["price_ma_10"]) &
-    (daily["price_ma_10"] > daily["price_ma_20"])
-).astype(int)
-
-daily["ma5_ma10_bias"] = daily["price_ma_5"] / daily["price_ma_10"] - 1
-daily["ma10_ma20_bias"] = daily["price_ma_10"] / daily["price_ma_20"] - 1
-daily["close_ma20_bias"] = daily["close"] / daily["price_ma_20"] - 1
-
-daily["ma_bull_stack_filter"] = (
-    (daily["price_ma_5"] > daily["price_ma_10"]) &
-    (daily["price_ma_10"] > daily["price_ma_20"]) &
-    (daily["ma5_ma10_bias"] >= ma_gap_threshold) &
-    (daily["ma10_ma20_bias"] >= ma_gap_threshold)
-)
+daily["ma5_gt_ma120_filter"] = daily["ma5"] > daily["ma120"]
 
 daily["open_interest_ma_5"] = (
     daily["open_interest"]
@@ -145,12 +126,14 @@ daily["is_open_interest_ma_bullish"] = (
 # 4. 生成因子信号
 # =========================
 # 这个因子关注价格和持仓量同时偏强时的投机度升高：
-# 价格均线呈多头排列且乖离率达标，持仓量短期均线高于中期均线，同时投机度突然升高。
+# 价格均线呈多头排列且乖离率达标，ma5 > ma120，
+# 持仓量短期均线高于中期均线，同时投机度突然升高。
 # 直觉上，这代表价格已经上涨一段，持仓量和投机度同时升高，
 # 可能是跟风资金集中进入，行情进入过热阶段。
 
 daily["price_up_speculation_up_signal"] = (
     daily["ma_bull_stack_filter"] &
+    daily["ma5_gt_ma120_filter"] &
     (daily["is_open_interest_ma_bullish"] == 1) &
     (daily["speculation_mad_score"] >= spec_mad_threshold)
 ).astype(int)
@@ -165,14 +148,16 @@ daily["price_up_speculation_up_signal"] = (
 
 feature_columns = [
     "daily_return",
-    "price_ma_5",
-    "price_ma_10",
-    "price_ma_20",
+    "ma5",
+    "ma10",
+    "ma20",
+    "ma120",
     "is_ma_bullish",
     "ma5_ma10_bias",
     "ma10_ma20_bias",
     "close_ma20_bias",
     "ma_bull_stack_filter",
+    "ma5_gt_ma120_filter",
     "open_interest",
     "open_interest_ma_5",
     "open_interest_ma_10",
@@ -192,9 +177,9 @@ result = save_factor_outputs(
     signal_column="price_up_speculation_up_signal",
     feature_columns=feature_columns,
     figure_feature_columns=[
-        "price_ma_5",
-        "price_ma_10",
-        "price_ma_20",
+        "ma5",
+        "ma10",
+        "ma20",
         "speculation_mad_score",
         "ma5_ma10_bias",
         "ma10_ma20_bias",
@@ -213,6 +198,7 @@ summary_table = result["summary_table"].copy()
 summary_table["ma_short_window"] = ma_short_window
 summary_table["ma_mid_window"] = ma_mid_window
 summary_table["ma_long_window"] = ma_long_window
+summary_table["ma_trend_window"] = ma_trend_window
 summary_table["ma_gap_threshold"] = ma_gap_threshold
 summary_table["open_interest_short_window"] = open_interest_short_window
 summary_table["open_interest_mid_window"] = open_interest_mid_window
@@ -228,6 +214,12 @@ summary_table["ma_bull_stack_filter_days"] = int(
 )
 summary_table["ma_bull_stack_filter_ratio"] = daily[
     "ma_bull_stack_filter"
+].mean()
+summary_table["ma5_gt_ma120_filter_days"] = int(
+    daily["ma5_gt_ma120_filter"].sum()
+)
+summary_table["ma5_gt_ma120_filter_ratio"] = daily[
+    "ma5_gt_ma120_filter"
 ].mean()
 summary_table["open_interest_ma_bullish_days"] = int(
     daily["is_open_interest_ma_bullish"].sum()

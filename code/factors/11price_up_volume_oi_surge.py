@@ -2,6 +2,7 @@ import numpy as np
 
 from volume_price_factor_utils import (
     SYMBOL,
+    add_price_ma_features,
     load_daily,
     mad_score,
     parse_factor_script_metadata,
@@ -46,10 +47,12 @@ min_mad_days = 5
 
 # 均线排列和乖离率过滤参数。
 # ma5 > ma10 > ma20 用于确认短中期多头排列；
+# ma5 > ma120 用于确认中长期趋势仍然偏强；
 # ma_gap_threshold 要求 ma5/ma10、ma10/ma20 之间至少拉开一定距离。
 ma_short_window = 5
 ma_mid_window = 10
 ma_long_window = 20
+ma_trend_window = 120
 ma_gap_threshold = 0.01
 
 
@@ -148,45 +151,26 @@ daily["price_volume_oi_score"] = (
 # =========================
 # 5.1 计算均线排列和乖离率过滤
 # =========================
-# ma_bull_stack_filter 要求价格均线形成 ma5 > ma10 > ma20 的多头排列，
-# 并且 ma5/ma10、ma10/ma20 的乖离率均超过 ma_gap_threshold。
-
-daily["ma5"] = (
-    daily["close"]
-    .rolling(ma_short_window, min_periods=ma_short_window)
-    .mean()
+daily = add_price_ma_features(
+    daily,
+    ma_gap_threshold=ma_gap_threshold,
+    short_window=ma_short_window,
+    mid_window=ma_mid_window,
+    long_window=ma_long_window,
+    trend_window=ma_trend_window,
 )
-daily["ma10"] = (
-    daily["close"]
-    .rolling(ma_mid_window, min_periods=ma_mid_window)
-    .mean()
-)
-daily["ma20"] = (
-    daily["close"]
-    .rolling(ma_long_window, min_periods=ma_long_window)
-    .mean()
-)
-
-daily["ma5_ma10_bias"] = daily["ma5"] / daily["ma10"] - 1
-daily["ma10_ma20_bias"] = daily["ma10"] / daily["ma20"] - 1
-daily["close_ma20_bias"] = daily["close"] / daily["ma20"] - 1
-
-daily["ma_bull_stack_filter"] = (
-    (daily["ma5"] > daily["ma10"]) &
-    (daily["ma10"] > daily["ma20"]) &
-    (daily["ma5_ma10_bias"] >= ma_gap_threshold) &
-    (daily["ma10_ma20_bias"] >= ma_gap_threshold)
-)
+daily["ma5_gt_ma120_filter"] = daily["ma5"] > daily["ma120"]
 
 # =========================
 # 6. 生成价格上涨、成交放大、持仓变化异常信号
 # =========================
-# 信号要求五类条件同时成立：
+# 信号要求六类条件同时成立：
 # 1. 收盘价处在近期高分位；
 # 2. 过去 5 日价格上涨；
 # 3. 5 日持仓变化率相对历史窗口明显异常；
 # 4. 成交量相对历史窗口明显放大。
-# 5. 均线呈 ma5 > ma10 > ma20 多头排列，且短中期均线乖离率达标。
+# 5. 均线呈 ma5 > ma10 > ma20 多头排列，且短中期均线乖离率达标；
+# 6. ma5 > ma120，中长期趋势偏强。
 # 这里捕捉的是“持仓变化异常”，不是单纯的持仓下降。
 
 daily["price_up_volume_oi_surge_signal"] = 0
@@ -201,6 +185,8 @@ daily.loc[
         daily["volume_mad_score"] >= volume_mad_threshold
     ) & (
         daily["ma_bull_stack_filter"]
+    ) & (
+        daily["ma5_gt_ma120_filter"]
     ),
     "price_up_volume_oi_surge_signal",
 ] = 1
@@ -231,10 +217,12 @@ feature_columns = [
     "ma5",
     "ma10",
     "ma20",
+    "ma120",
     "ma5_ma10_bias",
     "ma10_ma20_bias",
     "close_ma20_bias",
     "ma_bull_stack_filter",
+    "ma5_gt_ma120_filter",
 ]
 
 save_factor_outputs(
