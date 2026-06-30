@@ -153,3 +153,7 @@
 **持仓量**
 
 - `oi_ret_5 > 0.05`：要求过去 5 日持仓量对数变化超过 0.05，表示资金或仓位继续追入。
+
+## 结果
+网址：
+https://ziyu-ge.github.io/Volume-OI-Futures-Research/results/combined/figures/combined_factor_signals_dashboard.html
