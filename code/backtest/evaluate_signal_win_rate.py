@@ -1,4 +1,5 @@
 import argparse
+import os
 from pathlib import Path
 
 import numpy as np
@@ -16,6 +17,33 @@ DEFAULT_CLUSTER_MAX_GAP = 10
 DEFAULT_VOLATILITY_WINDOW = 20
 DEFAULT_VOLATILITY_MULTIPLIER = 2.0
 DEFAULT_VOLATILITY_MIN_HISTORY_DAYS = 20
+SUMMARY_TABLE_SPECS = (
+    (
+        "overall",
+        "all_symbols_all_factors",
+        "overall_by_lookahead.csv",
+    ),
+    (
+        "factor",
+        "all_symbols_factor",
+        "factor_by_lookahead.csv",
+    ),
+    (
+        "symbol_factor",
+        "symbol_factor",
+        "symbol_factor_by_lookahead.csv",
+    ),
+)
+
+os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
+os.environ.setdefault("XDG_CACHE_HOME", str(PROJECT_ROOT / ".cache"))
+(PROJECT_ROOT / ".matplotlib").mkdir(exist_ok=True)
+(PROJECT_ROOT / ".cache").mkdir(exist_ok=True)
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 def parse_csv_list(raw_value):
@@ -147,12 +175,6 @@ def get_threshold(daily, position):
     return daily.loc[position, "dynamic_drawdown_threshold"]
 
 
-def get_min_lookahead_days(args, lookahead_days):
-    if args.min_lookahead_days is None:
-        return lookahead_days
-    return args.min_lookahead_days
-
-
 def iter_signal_clusters(daily, cluster_max_gap):
     signal_positions = list(daily.index[daily["signal"] == 1])
     if not signal_positions:
@@ -184,13 +206,12 @@ def evaluate_cluster(daily, cluster_positions, args, lookahead_days):
     lookahead = daily.iloc[
         event_position + 1:event_position + 1 + lookahead_days
     ].copy()
-    min_lookahead_days = get_min_lookahead_days(args, lookahead_days)
+    future_prices = lookahead[args.price_column]
     is_evaluable = (
         pd.notna(event_price) and
         pd.notna(drawdown_threshold) and
         drawdown_threshold > 0 and
-        len(lookahead) >= min_lookahead_days and
-        lookahead[args.price_column].notna().any()
+        future_prices.notna().sum() >= lookahead_days
     )
 
     row = {
@@ -198,53 +219,211 @@ def evaluate_cluster(daily, cluster_positions, args, lookahead_days):
         "factor_id": event_row["factor_id"],
         "factor_name": event_row["factor_name"],
         "factor_label": event_row["factor_label"],
-        "run_dir": event_row["run_dir"],
         "cluster_start_date": daily.loc[start_position, "date"].date().isoformat(),
         "event_date": event_row["date"].date().isoformat(),
         "event_price": event_price,
         "cluster_signal_days": len(cluster_positions),
-        "cluster_trading_span": event_position - start_position + 1,
         "lookahead_days": lookahead_days,
-        "volatility_window": args.volatility_window,
-        "volatility_multiplier": DEFAULT_VOLATILITY_MULTIPLIER,
         "drawdown_threshold": drawdown_threshold,
         "is_evaluable": bool(is_evaluable),
         "win": pd.NA,
-        "future_min_date": "",
-        "future_min_price": np.nan,
-        "future_min_return": np.nan,
-        "future_end_date": "",
-        "future_end_price": np.nan,
-        "future_end_return": np.nan,
-        "days_to_future_min": np.nan,
+        "max_drawdown": np.nan,
     }
 
     if not is_evaluable:
         return row
 
-    future_prices = lookahead[args.price_column]
     min_index = future_prices.idxmin()
-    end_row = lookahead.iloc[-1]
 
     future_min_price = daily.loc[min_index, args.price_column]
-    future_end_price = end_row[args.price_column]
+    max_drawdown = max(event_price - future_min_price, 0) / event_price
 
-    future_min_return = future_min_price / event_price - 1
-    future_end_return = future_end_price / event_price - 1
-
-    win = future_min_return <= -drawdown_threshold
+    win = max_drawdown >= drawdown_threshold
 
     row.update({
         "win": bool(win),
-        "future_min_date": daily.loc[min_index, "date"].date().isoformat(),
-        "future_min_price": future_min_price,
-        "future_min_return": future_min_return,
-        "future_end_date": end_row["date"].date().isoformat(),
-        "future_end_price": future_end_price,
-        "future_end_return": future_end_return,
-        "days_to_future_min": int(min_index - event_position),
+        "max_drawdown": max_drawdown,
     })
     return row
+
+
+def dedupe_legend(ax):
+    handles, labels = ax.get_legend_handles_labels()
+    seen = set()
+    unique_handles = []
+    unique_labels = []
+
+    for handle, label in zip(handles, labels):
+        if label in seen:
+            continue
+        seen.add(label)
+        unique_handles.append(handle)
+        unique_labels.append(label)
+
+    ax.legend(unique_handles, unique_labels, loc="best", fontsize=8)
+
+
+def is_truthy(value):
+    return bool(pd.notna(value) and bool(value))
+
+
+def plot_signal_clusters(daily, clusters, event_rows, args, lookahead_days):
+    if not event_rows:
+        return None
+
+    events = pd.DataFrame(event_rows)
+    if events.empty:
+        return None
+
+    events["event_date"] = pd.to_datetime(events["event_date"])
+    events["event_price"] = pd.to_numeric(
+        events["event_price"],
+        errors="coerce",
+    )
+
+    symbol = daily["symbol"].iloc[0]
+    factor_id = daily["factor_id"].iloc[0]
+    factor_name = daily["factor_name"].iloc[0]
+    figures_dir = (
+        args.output_dir
+        / "figures"
+        / "signal_clusters"
+        / f"{lookahead_days}d"
+    )
+    figures_dir.mkdir(parents=True, exist_ok=True)
+    figure_path = (
+        figures_dir
+        / f"{symbol}_{factor_id}_{factor_name}_signal_clusters_{lookahead_days}d.png"
+    )
+
+    fig, ax = plt.subplots(figsize=(14, 7))
+    ax.plot(
+        daily["date"],
+        daily[args.price_column],
+        color="#333333",
+        linewidth=1.2,
+        label="close",
+    )
+
+    signal_points = daily[daily["signal"] == 1].dropna(
+        subset=["date", args.price_column]
+    )
+    if not signal_points.empty:
+        ax.scatter(
+            signal_points["date"],
+            signal_points[args.price_column],
+            s=14,
+            color="#f59f00",
+            alpha=0.45,
+            label="raw signal",
+            zorder=3,
+        )
+
+    event_by_date = {
+        pd.Timestamp(row["event_date"]).normalize(): row
+        for _, row in events.iterrows()
+    }
+
+    for cluster_positions in clusters:
+        start_date = daily.loc[cluster_positions[0], "date"]
+        event_date = daily.loc[cluster_positions[-1], "date"]
+        event_key = pd.Timestamp(event_date).normalize()
+        event = event_by_date.get(event_key)
+
+        if event is None or not is_truthy(event.get("is_evaluable")):
+            span_color = "#adb5bd"
+        elif is_truthy(event.get("win")):
+            span_color = "#2f9e44"
+        else:
+            span_color = "#e03131"
+
+        if start_date == event_date:
+            ax.axvline(
+                event_date,
+                color=span_color,
+                alpha=0.16,
+                linewidth=1.0,
+                zorder=1,
+            )
+        else:
+            ax.axvspan(
+                start_date,
+                event_date,
+                color=span_color,
+                alpha=0.08,
+                zorder=1,
+            )
+
+    useful_events = events[events["win"].eq(True)].dropna(
+        subset=["event_date", "event_price"]
+    )
+    other_events = events[
+        events["is_evaluable"].eq(True) & ~events["win"].eq(True)
+    ].dropna(subset=["event_date", "event_price"])
+    pending_events = events[~events["is_evaluable"].eq(True)].dropna(
+        subset=["event_date", "event_price"]
+    )
+
+    if not other_events.empty:
+        ax.scatter(
+            other_events["event_date"],
+            other_events["event_price"],
+            s=34,
+            marker="x",
+            color="#c92a2a",
+            linewidths=1.2,
+            label="cluster end, not useful",
+            zorder=5,
+        )
+
+    if not useful_events.empty:
+        ax.scatter(
+            useful_events["event_date"],
+            useful_events["event_price"],
+            s=78,
+            marker="*",
+            color="#2f9e44",
+            edgecolors="#ffffff",
+            linewidths=0.6,
+            label="useful cluster end",
+            zorder=6,
+        )
+
+    if not pending_events.empty:
+        ax.scatter(
+            pending_events["event_date"],
+            pending_events["event_price"],
+            s=34,
+            marker="D",
+            facecolors="none",
+            edgecolors="#868e96",
+            linewidths=1.0,
+            label="cluster end, not evaluable",
+            zorder=5,
+        )
+
+    evaluable_count = int(events["is_evaluable"].sum())
+    useful_count = int(events["win"].eq(True).sum())
+    win_rate = useful_count / evaluable_count if evaluable_count else np.nan
+    title_rate = "NA" if pd.isna(win_rate) else f"{win_rate:.1%}"
+    ax.set_title(
+        (
+            f"{symbol} factor {factor_id}: {factor_name} | "
+            f"lookahead {lookahead_days}d | "
+            f"useful {useful_count}/{evaluable_count} ({title_rate})"
+        ),
+        fontsize=12,
+    )
+    ax.set_xlabel("date")
+    ax.set_ylabel(args.price_column)
+    ax.grid(True, alpha=0.22)
+    dedupe_legend(ax)
+    fig.autofmt_xdate()
+    fig.tight_layout()
+    fig.savefig(figure_path, dpi=args.plot_dpi)
+    plt.close(fig)
+
+    return figure_path
 
 
 def evaluate_factor_file(file_info, args):
@@ -253,15 +432,28 @@ def evaluate_factor_file(file_info, args):
     clusters = iter_signal_clusters(daily, args.cluster_max_gap)
     event_rows = []
     baseline_rows = []
+    plot_paths = []
 
     for lookahead_days in args.lookahead_days_list:
-        event_rows.extend(
+        lookahead_event_rows = list(
             evaluate_cluster(daily, cluster_positions, args, lookahead_days)
             for cluster_positions in clusters
         )
+        event_rows.extend(lookahead_event_rows)
         baseline_rows.append(evaluate_baseline(daily, args, lookahead_days))
 
-    return event_rows, baseline_rows
+        if not args.skip_plots:
+            plot_path = plot_signal_clusters(
+                daily=daily,
+                clusters=clusters,
+                event_rows=lookahead_event_rows,
+                args=args,
+                lookahead_days=lookahead_days,
+            )
+            if plot_path is not None:
+                plot_paths.append(plot_path)
+
+    return event_rows, baseline_rows, plot_paths
 
 
 def evaluate_baseline(daily, args, lookahead_days):
@@ -274,35 +466,26 @@ def evaluate_baseline(daily, args, lookahead_days):
     future_counts = future_prices.notna().sum(axis=1)
 
     future_min = future_prices.min(axis=1)
-    future_end = prices.shift(-lookahead_days)
-
-    future_min_return = future_min / prices - 1
-    future_end_return = future_end / prices - 1
-    min_lookahead_days = get_min_lookahead_days(args, lookahead_days)
+    max_drawdown = (1 - future_min / prices).clip(lower=0)
     drawdown_threshold = daily["dynamic_drawdown_threshold"]
 
     evaluable = (
         prices.notna() &
-        (future_counts >= min_lookahead_days) &
+        (future_counts >= lookahead_days) &
         future_min.notna() &
         drawdown_threshold.notna() &
         (drawdown_threshold > 0)
     )
-    win = future_min_return <= -drawdown_threshold
+    win = max_drawdown >= drawdown_threshold
 
     evaluable_count = int(evaluable.sum())
     return {
         "symbol": daily["symbol"].iloc[0],
         "factor_id": daily["factor_id"].iloc[0],
         "factor_name": daily["factor_name"].iloc[0],
-        "factor_label": daily["factor_label"].iloc[0],
-        "run_dir": daily["run_dir"].iloc[0],
         "lookahead_days": lookahead_days,
         "baseline_events": evaluable_count,
         "baseline_win_events": int(win[evaluable].sum()),
-        "baseline_future_min_return_sum": future_min_return[evaluable].sum(),
-        "baseline_future_end_return_sum": future_end_return[evaluable].sum(),
-        "baseline_drawdown_threshold_sum": drawdown_threshold[evaluable].sum(),
     }
 
 
@@ -314,8 +497,6 @@ def summarize_events(events, baselines):
         "symbol",
         "factor_id",
         "factor_name",
-        "factor_label",
-        "run_dir",
         "lookahead_days",
     ]
     rows = []
@@ -327,8 +508,6 @@ def summarize_events(events, baselines):
         [
             "factor_id",
             "factor_name",
-            "factor_label",
-            "run_dir",
             "lookahead_days",
         ],
         dropna=False,
@@ -348,8 +527,6 @@ def summarize_events(events, baselines):
             "ALL_SYMBOLS",
             "ALL_FACTORS",
             "all_factors",
-            "ALL_FACTORS",
-            "ALL_RUNS",
             lookahead_days,
         )
         rows.append(
@@ -393,8 +570,6 @@ def summarize_baselines(baselines, group_columns):
         [
             "factor_id",
             "factor_name",
-            "factor_label",
-            "run_dir",
             "lookahead_days",
         ],
         dropna=False,
@@ -417,8 +592,6 @@ def summarize_baselines(baselines, group_columns):
             "ALL_SYMBOLS",
             "ALL_FACTORS",
             "all_factors",
-            "ALL_FACTORS",
-            "ALL_RUNS",
             lookahead_days,
         )
         rows.append(
@@ -439,23 +612,8 @@ def build_baseline_summary_row(keys, group, group_columns, row_type):
 
     if baseline_events:
         baseline_win_rate = baseline_win_events / baseline_events
-        baseline_mean_future_min_return = (
-            group["baseline_future_min_return_sum"].sum() /
-            baseline_events
-        )
-        baseline_mean_future_end_return = (
-            group["baseline_future_end_return_sum"].sum() /
-            baseline_events
-        )
-        baseline_mean_drawdown_threshold = (
-            group["baseline_drawdown_threshold_sum"].sum() /
-            baseline_events
-        )
     else:
         baseline_win_rate = np.nan
-        baseline_mean_future_min_return = np.nan
-        baseline_mean_future_end_return = np.nan
-        baseline_mean_drawdown_threshold = np.nan
 
     row = dict(zip(group_columns, keys))
     row.update({
@@ -463,9 +621,6 @@ def build_baseline_summary_row(keys, group, group_columns, row_type):
         "baseline_events": baseline_events,
         "baseline_win_events": baseline_win_events,
         "baseline_win_rate": baseline_win_rate,
-        "baseline_mean_future_min_return": baseline_mean_future_min_return,
-        "baseline_mean_future_end_return": baseline_mean_future_end_return,
-        "baseline_mean_drawdown_threshold": baseline_mean_drawdown_threshold,
     })
     return row
 
@@ -485,32 +640,104 @@ def build_summary_row(keys, group, group_columns, row_type):
     row = dict(zip(group_columns, keys))
     row.update({
         "row_type": row_type,
-        "signal_days": int(group["cluster_signal_days"].sum()),
         "cluster_events": event_count,
         "evaluable_events": evaluable_count,
         "win_events": win_count,
         "win_rate": win_rate,
-        "mean_cluster_signal_days": group["cluster_signal_days"].mean(),
         "mean_drawdown_threshold": evaluable["drawdown_threshold"].mean(),
-        "mean_future_min_return": evaluable["future_min_return"].mean(),
-        "median_future_min_return": evaluable["future_min_return"].median(),
-        "mean_future_end_return": evaluable["future_end_return"].mean(),
-        "mean_days_to_future_min": evaluable["days_to_future_min"].mean(),
+        "strategy_observation_max_drawdown": evaluable["max_drawdown"].max(),
     })
     return row
 
 
+def build_output_events(events):
+    output = events.copy()
+    output = output.rename(
+        columns={
+            "cluster_start_date": "signal_cluster_start_date",
+            "event_date": "signal_date",
+            "event_price": "signal_close",
+            "drawdown_threshold": "threshold",
+            "max_drawdown": "strategy_observation_max_drawdown",
+            "win": "strategy_win",
+        }
+    )
+    columns = [
+        "symbol",
+        "factor_id",
+        "factor_name",
+        "lookahead_days",
+        "signal_cluster_start_date",
+        "signal_date",
+        "signal_close",
+        "cluster_signal_days",
+        "threshold",
+        "strategy_observation_max_drawdown",
+        "strategy_win",
+        "is_evaluable",
+    ]
+    return output[[col for col in columns if col in output.columns]]
+
+
+def build_output_summary(summary):
+    output = summary.copy()
+    output = output.rename(
+        columns={
+            "cluster_events": "signal_clusters",
+            "evaluable_events": "strategy_samples",
+            "win_events": "strategy_wins",
+            "win_rate": "strategy_win_rate",
+            "win_rate_lift": "win_rate_diff",
+            "mean_drawdown_threshold": "threshold",
+            "baseline_events": "baseline_samples",
+            "baseline_win_events": "baseline_wins",
+        }
+    )
+    columns = [
+        "row_type",
+        "symbol",
+        "factor_id",
+        "factor_name",
+        "lookahead_days",
+        "signal_clusters",
+        "strategy_samples",
+        "strategy_wins",
+        "threshold",
+        "strategy_win_rate",
+        "baseline_samples",
+        "baseline_wins",
+        "baseline_win_rate",
+        "win_rate_diff",
+        "strategy_observation_max_drawdown",
+    ]
+    return output[[col for col in columns if col in output.columns]]
+
+
 def save_outputs(events, summary, output_dir):
     tables_dir = output_dir / "tables"
-    tables_dir.mkdir(parents=True, exist_ok=True)
+    events_dir = tables_dir / "events"
+    summary_dir = tables_dir / "summary"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    summary_dir.mkdir(parents=True, exist_ok=True)
 
-    events_path = tables_dir / "signal_cluster_events.csv"
-    summary_path = tables_dir / "signal_cluster_win_rate_summary.csv"
+    events_path = events_dir / "signal_cluster_events.csv"
+    summary_output = build_output_summary(summary)
+    summary_paths = {}
 
-    events.to_csv(events_path, index=False)
-    summary.to_csv(summary_path, index=False)
+    build_output_events(events).to_csv(events_path, index=False)
 
-    return events_path, summary_path
+    for table_name, row_type, filename in SUMMARY_TABLE_SPECS:
+        table_path = summary_dir / filename
+        summary_table = summary_output[
+            summary_output["row_type"].eq(row_type)
+        ].copy()
+        summary_table.to_csv(table_path, index=False)
+        summary_paths[table_name] = table_path
+
+    return {
+        "events": events_path,
+        "summary": summary_paths,
+    }
 
 
 def main():
@@ -562,12 +789,6 @@ def main():
         help="一次评估多个观察窗口，逗号分隔，例如：3,5,10。",
     )
     parser.add_argument(
-        "--min-lookahead-days",
-        type=int,
-        default=None,
-        help="最少需要多少个未来交易日才纳入胜率。默认等于各自观察窗口。",
-    )
-    parser.add_argument(
         "--volatility-window",
         type=int,
         default=DEFAULT_VOLATILITY_WINDOW,
@@ -591,6 +812,17 @@ def main():
             f"默认：{DEFAULT_CLUSTER_MAX_GAP}；设为 -1 表示每个信号单独计票。"
         ),
     )
+    parser.add_argument(
+        "--skip-plots",
+        action="store_true",
+        help="只输出胜率表，不生成价格信号图。",
+    )
+    parser.add_argument(
+        "--plot-dpi",
+        type=int,
+        default=160,
+        help="输出 PNG 图片的 dpi，默认：160。",
+    )
 
     args = parser.parse_args()
     if args.lookahead_days_list:
@@ -610,6 +842,7 @@ def main():
 
     runs_dir = args.runs_dir.resolve()
     output_dir = args.output_dir.resolve()
+    args.output_dir = output_dir
     symbols = parse_csv_list(args.symbols)
     factor_ids = parse_factor_ids(args.factor_ids)
 
@@ -621,12 +854,17 @@ def main():
 
     rows = []
     baseline_rows = []
+    plot_paths = []
     errors = []
     for file_info in factor_files:
         try:
-            event_rows, baseline_row = evaluate_factor_file(file_info, args)
+            event_rows, baseline_row, factor_plot_paths = evaluate_factor_file(
+                file_info,
+                args,
+            )
             rows.extend(event_rows)
             baseline_rows.extend(baseline_row)
+            plot_paths.extend(factor_plot_paths)
         except Exception as exc:
             errors.append((file_info["path"], exc))
 
@@ -637,7 +875,7 @@ def main():
     events = pd.DataFrame(rows)
     baselines = pd.DataFrame(baseline_rows)
     summary = summarize_events(events, baselines)
-    events_path, summary_path = save_outputs(events, summary, output_dir)
+    output_paths = save_outputs(events, summary, output_dir)
 
     aggregate = (
         summary[summary["row_type"] == "all_symbols_all_factors"]
@@ -651,13 +889,27 @@ def main():
             f"{int(row['lookahead_days'])} 日；"
             f"信号簇事件：{int(row['cluster_events'])}；"
             f"可评价：{int(row['evaluable_events'])}；"
-            f"胜率：{row['win_rate']:.2%}；"
-            f"基准：{row['baseline_win_rate']:.2%}；"
-            f"提升：{row['win_rate_lift']:.2%}",
+            f"阈值：{row['mean_drawdown_threshold']:.2%}；"
+            f"策略胜率：{row['win_rate']:.2%}；"
+            f"基准胜率：{row['baseline_win_rate']:.2%}；"
+            f"胜率差：{row['win_rate_lift']:.2%}；"
+            f"策略观察窗口最大回撤："
+            f"{row['strategy_observation_max_drawdown']:.2%}",
             flush=True,
         )
-    print(f"事件明细：{events_path}", flush=True)
-    print(f"胜率汇总：{summary_path}", flush=True)
+    print(f"事件明细：{output_paths['events']}", flush=True)
+    print(f"总览汇总：{output_paths['summary']['overall']}", flush=True)
+    print(f"因子汇总：{output_paths['summary']['factor']}", flush=True)
+    print(
+        f"品种-因子汇总：{output_paths['summary']['symbol_factor']}",
+        flush=True,
+    )
+    if not args.skip_plots:
+        print(f"信号图数量：{len(plot_paths)}", flush=True)
+        print(
+            f"信号图目录：{output_dir / 'figures' / 'signal_clusters'}",
+            flush=True,
+        )
 
     if errors:
         print("\n以下文件读取失败，已跳过：", flush=True)
