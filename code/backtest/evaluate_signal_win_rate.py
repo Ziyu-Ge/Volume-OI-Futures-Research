@@ -227,6 +227,7 @@ def evaluate_cluster(daily, cluster_positions, args, lookahead_days):
         "drawdown_threshold": drawdown_threshold,
         "is_evaluable": bool(is_evaluable),
         "win": pd.NA,
+        "observation_end_drawdown": np.nan,
         "max_drawdown": np.nan,
     }
 
@@ -236,12 +237,15 @@ def evaluate_cluster(daily, cluster_positions, args, lookahead_days):
     min_index = future_prices.idxmin()
 
     future_min_price = daily.loc[min_index, args.price_column]
+    future_end_price = future_prices.iloc[-1]
+    observation_end_drawdown = max(event_price - future_end_price, 0) / event_price
     max_drawdown = max(event_price - future_min_price, 0) / event_price
 
-    win = max_drawdown >= drawdown_threshold
+    win = observation_end_drawdown >= drawdown_threshold
 
     row.update({
         "win": bool(win),
+        "observation_end_drawdown": observation_end_drawdown,
         "max_drawdown": max_drawdown,
     })
     return row
@@ -465,18 +469,18 @@ def evaluate_baseline(daily, args, lookahead_days):
     future_prices = pd.concat(future_price_frames, axis=1)
     future_counts = future_prices.notna().sum(axis=1)
 
-    future_min = future_prices.min(axis=1)
-    max_drawdown = (1 - future_min / prices).clip(lower=0)
+    future_end_price = prices.shift(-lookahead_days)
+    observation_end_drawdown = (1 - future_end_price / prices).clip(lower=0)
     drawdown_threshold = daily["dynamic_drawdown_threshold"]
 
     evaluable = (
         prices.notna() &
         (future_counts >= lookahead_days) &
-        future_min.notna() &
+        future_end_price.notna() &
         drawdown_threshold.notna() &
         (drawdown_threshold > 0)
     )
-    win = max_drawdown >= drawdown_threshold
+    win = observation_end_drawdown >= drawdown_threshold
 
     evaluable_count = int(evaluable.sum())
     return {
@@ -645,6 +649,9 @@ def build_summary_row(keys, group, group_columns, row_type):
         "win_events": win_count,
         "win_rate": win_rate,
         "mean_drawdown_threshold": evaluable["drawdown_threshold"].mean(),
+        "strategy_observation_end_drawdown": (
+            evaluable["observation_end_drawdown"].max()
+        ),
         "strategy_observation_max_drawdown": evaluable["max_drawdown"].max(),
     })
     return row
@@ -658,6 +665,7 @@ def build_output_events(events):
             "event_date": "signal_date",
             "event_price": "signal_close",
             "drawdown_threshold": "threshold",
+            "observation_end_drawdown": "strategy_observation_end_drawdown",
             "max_drawdown": "strategy_observation_max_drawdown",
             "win": "strategy_win",
         }
@@ -672,6 +680,7 @@ def build_output_events(events):
         "signal_close",
         "cluster_signal_days",
         "threshold",
+        "strategy_observation_end_drawdown",
         "strategy_observation_max_drawdown",
         "strategy_win",
         "is_evaluable",
@@ -708,6 +717,7 @@ def build_output_summary(summary):
         "baseline_wins",
         "baseline_win_rate",
         "win_rate_diff",
+        "strategy_observation_end_drawdown",
         "strategy_observation_max_drawdown",
     ]
     return output[[col for col in columns if col in output.columns]]
@@ -744,7 +754,8 @@ def main():
     parser = argparse.ArgumentParser(
         description=(
             "用信号簇最后一天评估信号胜率："
-            "未来窗口内最大回撤达到前 20 日平均波动率两倍即算胜。"
+            "未来窗口最后一天相对事件日的回撤达到"
+            "前 20 日平均波动率两倍即算胜。"
         )
     )
     parser.add_argument(
@@ -893,6 +904,8 @@ def main():
             f"策略胜率：{row['win_rate']:.2%}；"
             f"基准胜率：{row['baseline_win_rate']:.2%}；"
             f"胜率差：{row['win_rate_lift']:.2%}；"
+            f"策略观察窗口末日回撤："
+            f"{row['strategy_observation_end_drawdown']:.2%}；"
             f"策略观察窗口最大回撤："
             f"{row['strategy_observation_max_drawdown']:.2%}",
             flush=True,
