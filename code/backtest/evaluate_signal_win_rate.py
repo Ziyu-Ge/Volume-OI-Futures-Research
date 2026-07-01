@@ -69,11 +69,6 @@ SUMMARY_TABLE_SPECS = (
         "factor_by_lookahead.csv",
     ),
     (
-        "symbol_factor",
-        "symbol_factor",
-        "symbol_factor_by_lookahead.csv",
-    ),
-    (
         "overall_confidence",
         "all_symbols_all_factors_confidence",
         "overall_by_confidence.csv",
@@ -83,12 +78,56 @@ SUMMARY_TABLE_SPECS = (
         "all_symbols_factor_confidence",
         "factor_by_confidence.csv",
     ),
+)
+SUMMARY_GROUP_COLUMNS = [
+    "symbol",
+    "factor_id",
+    "factor_name",
+    "lookahead_days",
+    "confidence_level",
+]
+SUMMARY_GROUP_SPECS = (
     (
-        "symbol_factor_confidence",
-        "symbol_factor_confidence",
-        "symbol_factor_by_confidence.csv",
+        "all_symbols_factor",
+        ["factor_id", "factor_name", "lookahead_days"],
+        {"symbol": "ALL_SYMBOLS", "confidence_level": ALL_CONFIDENCE_LEVEL},
+    ),
+    (
+        "all_symbols_all_factors",
+        ["lookahead_days"],
+        {
+            "symbol": "ALL_SYMBOLS",
+            "factor_id": "ALL_FACTORS",
+            "factor_name": "all_factors",
+            "confidence_level": ALL_CONFIDENCE_LEVEL,
+        },
+    ),
+    (
+        "all_symbols_factor_confidence",
+        ["factor_id", "factor_name", "lookahead_days", "confidence_level"],
+        {"symbol": "ALL_SYMBOLS"},
+    ),
+    (
+        "all_symbols_all_factors_confidence",
+        ["lookahead_days", "confidence_level"],
+        {
+            "symbol": "ALL_SYMBOLS",
+            "factor_id": "ALL_FACTORS",
+            "factor_name": "all_factors",
+        },
     ),
 )
+SUMMARY_OUTPUT_COLUMNS = [
+    "factor_id",
+    "factor_name",
+    "lookahead_days",
+    "confidence_level",
+    "threshold",
+    "strategy_win_rate",
+    "baseline_win_rate",
+    "win_rate_diff",
+    "strategy_observation_max_drawdown",
+]
 
 os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(PROJECT_ROOT / ".cache"))
@@ -655,27 +694,7 @@ def evaluate_cluster(daily, cluster_positions, args, lookahead_days):
     return row
 
 
-def dedupe_legend(ax):
-    handles, labels = ax.get_legend_handles_labels()
-    seen = set()
-    unique_handles = []
-    unique_labels = []
-
-    for handle, label in zip(handles, labels):
-        if label in seen:
-            continue
-        seen.add(label)
-        unique_handles.append(handle)
-        unique_labels.append(label)
-
-    ax.legend(unique_handles, unique_labels, loc="best", fontsize=8)
-
-
-def is_truthy(value):
-    return bool(pd.notna(value) and bool(value))
-
-
-def plot_signal_clusters(daily, clusters, event_rows, args, lookahead_days):
+def plot_signal_clusters(daily, event_rows, args, lookahead_days):
     if not event_rows:
         return None
 
@@ -705,109 +724,30 @@ def plot_signal_clusters(daily, clusters, event_rows, args, lookahead_days):
     )
 
     fig, ax = plt.subplots(figsize=(14, 7))
-    ax.plot(
-        daily["date"],
-        daily[args.price_column],
-        color="#333333",
-        linewidth=1.2,
-        label="close",
-    )
+    ax.plot(daily["date"], daily[args.price_column], color="#333333", linewidth=1.1)
 
-    signal_points = daily[daily["signal"] == 1].dropna(
-        subset=["date", args.price_column]
+    marker_specs = (
+        (events["win"].eq(True), "win", "#2f9e44", "^"),
+        (
+            events["is_evaluable"].eq(True) & ~events["win"].eq(True),
+            "miss",
+            "#c92a2a",
+            "x",
+        ),
+        (~events["is_evaluable"].eq(True), "not evaluable", "#868e96", "o"),
     )
-    if not signal_points.empty:
+    for mask, label, color, marker in marker_specs:
+        points = events[mask].dropna(subset=["event_date", "event_price"])
+        if points.empty:
+            continue
         ax.scatter(
-            signal_points["date"],
-            signal_points[args.price_column],
-            s=14,
-            color="#f59f00",
-            alpha=0.45,
-            label="raw signal",
-            zorder=3,
-        )
-
-    event_by_date = {
-        pd.Timestamp(row["event_date"]).normalize(): row
-        for _, row in events.iterrows()
-    }
-
-    for cluster_positions in clusters:
-        start_date = daily.loc[cluster_positions[0], "date"]
-        event_date = daily.loc[cluster_positions[-1], "date"]
-        event_key = pd.Timestamp(event_date).normalize()
-        event = event_by_date.get(event_key)
-
-        if event is None or not is_truthy(event.get("is_evaluable")):
-            span_color = "#adb5bd"
-        elif is_truthy(event.get("win")):
-            span_color = "#2f9e44"
-        else:
-            span_color = "#e03131"
-
-        if start_date == event_date:
-            ax.axvline(
-                event_date,
-                color=span_color,
-                alpha=0.16,
-                linewidth=1.0,
-                zorder=1,
-            )
-        else:
-            ax.axvspan(
-                start_date,
-                event_date,
-                color=span_color,
-                alpha=0.08,
-                zorder=1,
-            )
-
-    useful_events = events[events["win"].eq(True)].dropna(
-        subset=["event_date", "event_price"]
-    )
-    other_events = events[
-        events["is_evaluable"].eq(True) & ~events["win"].eq(True)
-    ].dropna(subset=["event_date", "event_price"])
-    pending_events = events[~events["is_evaluable"].eq(True)].dropna(
-        subset=["event_date", "event_price"]
-    )
-
-    if not other_events.empty:
-        ax.scatter(
-            other_events["event_date"],
-            other_events["event_price"],
+            points["event_date"],
+            points["event_price"],
             s=34,
-            marker="x",
-            color="#c92a2a",
-            linewidths=1.2,
-            label="cluster end, not useful",
-            zorder=5,
-        )
-
-    if not useful_events.empty:
-        ax.scatter(
-            useful_events["event_date"],
-            useful_events["event_price"],
-            s=78,
-            marker="*",
-            color="#2f9e44",
-            edgecolors="#ffffff",
-            linewidths=0.6,
-            label="useful cluster end",
-            zorder=6,
-        )
-
-    if not pending_events.empty:
-        ax.scatter(
-            pending_events["event_date"],
-            pending_events["event_price"],
-            s=34,
-            marker="D",
-            facecolors="none",
-            edgecolors="#868e96",
-            linewidths=1.0,
-            label="cluster end, not evaluable",
-            zorder=5,
+            marker=marker,
+            color=color,
+            label=label,
+            zorder=4,
         )
 
     evaluable_count = int(events["is_evaluable"].sum())
@@ -825,7 +765,8 @@ def plot_signal_clusters(daily, clusters, event_rows, args, lookahead_days):
     ax.set_xlabel("date")
     ax.set_ylabel(args.price_column)
     ax.grid(True, alpha=0.22)
-    dedupe_legend(ax)
+    if ax.get_legend_handles_labels()[0]:
+        ax.legend(loc="best", fontsize=8)
     fig.autofmt_xdate()
     fig.tight_layout()
     fig.savefig(figure_path, dpi=args.plot_dpi)
@@ -858,7 +799,6 @@ def evaluate_factor_file(file_info, args):
         if not args.skip_plots:
             plot_path = plot_signal_clusters(
                 daily=daily,
-                clusters=clusters,
                 event_rows=lookahead_event_rows,
                 args=args,
                 lookahead_days=lookahead_days,
@@ -910,13 +850,6 @@ def summarize_events(events, baselines):
         events = events.copy()
         events["confidence_level"] = UNKNOWN_CONFIDENCE_LEVEL
 
-    base_group_columns = [
-        "symbol",
-        "factor_id",
-        "factor_name",
-        "lookahead_days",
-    ]
-    group_columns = base_group_columns + ["confidence_level"]
     confidence_levels = ordered_confidence_levels(
         events["confidence_level"]
         .dropna()
@@ -925,110 +858,16 @@ def summarize_events(events, baselines):
     )
     rows = []
 
-    for keys, group in events.groupby(base_group_columns, dropna=False):
-        rows.append(
-            build_summary_row(
-                tuple(keys) + (ALL_CONFIDENCE_LEVEL,),
-                group,
-                group_columns,
-                "symbol_factor",
-            )
-        )
-
-    for keys, group in events.groupby(
-        [
-            "factor_id",
-            "factor_name",
-            "lookahead_days",
-        ],
-        dropna=False,
-    ):
-        full_keys = ("ALL_SYMBOLS",) + tuple(keys) + (ALL_CONFIDENCE_LEVEL,)
-        rows.append(
-            build_summary_row(
-                full_keys,
-                group,
-                group_columns,
-                "all_symbols_factor",
-            )
-        )
-
-    for lookahead_days, group in events.groupby("lookahead_days", dropna=False):
-        full_keys = (
-            "ALL_SYMBOLS",
-            "ALL_FACTORS",
-            "all_factors",
-            lookahead_days,
-            ALL_CONFIDENCE_LEVEL,
-        )
-        rows.append(
-            build_summary_row(
-                full_keys,
-                group,
-                group_columns,
-                "all_symbols_all_factors",
-            )
-        )
-
-    for keys, group in events.groupby(group_columns, dropna=False):
-        rows.append(
-            build_summary_row(
-                keys,
-                group,
-                group_columns,
-                "symbol_factor_confidence",
-            )
-        )
-
-    for keys, group in events.groupby(
-        [
-            "factor_id",
-            "factor_name",
-            "lookahead_days",
-            "confidence_level",
-        ],
-        dropna=False,
-    ):
-        full_keys = ("ALL_SYMBOLS",) + tuple(keys)
-        rows.append(
-            build_summary_row(
-                full_keys,
-                group,
-                group_columns,
-                "all_symbols_factor_confidence",
-            )
-        )
-
-    for keys, group in events.groupby(
-        ["lookahead_days", "confidence_level"],
-        dropna=False,
-    ):
-        lookahead_days, confidence_level = keys
-        full_keys = (
-            "ALL_SYMBOLS",
-            "ALL_FACTORS",
-            "all_factors",
-            lookahead_days,
-            confidence_level,
-        )
-        rows.append(
-            build_summary_row(
-                full_keys,
-                group,
-                group_columns,
-                "all_symbols_all_factors_confidence",
-            )
-        )
+    for row_type, group_columns, fixed_values in SUMMARY_GROUP_SPECS:
+        for values, group in iter_group_values(events, group_columns):
+            values.update(fixed_values)
+            rows.append(build_summary_row(values, group, row_type))
 
     summary = pd.DataFrame(rows)
-    baseline_summary = summarize_baselines(
-        baselines,
-        group_columns,
-        confidence_levels,
-    )
+    baseline_summary = summarize_baselines(baselines, confidence_levels)
     summary = summary.merge(
         baseline_summary,
-        on=["row_type"] + group_columns,
+        on=["row_type"] + SUMMARY_GROUP_COLUMNS,
         how="left",
     )
     summary["win_rate_lift"] = (
@@ -1049,7 +888,16 @@ def summarize_events(events, baselines):
     return summary.drop(columns=["_confidence_sort"])
 
 
-def summarize_baselines(baselines, group_columns, confidence_levels):
+def iter_group_values(frame, group_columns):
+    for key, group in frame.groupby(group_columns, dropna=False):
+        if len(group_columns) == 1 and not isinstance(key, tuple):
+            key = (key,)
+        elif not isinstance(key, tuple):
+            key = (key,)
+        yield dict(zip(group_columns, key)), group
+
+
+def summarize_baselines(baselines, confidence_levels):
     baseline_columns = [
         "baseline_events",
         "baseline_win_events",
@@ -1057,91 +905,33 @@ def summarize_baselines(baselines, group_columns, confidence_levels):
     ]
     if baselines.empty:
         return pd.DataFrame(
-            columns=["row_type"] + group_columns + baseline_columns
+            columns=["row_type"] + SUMMARY_GROUP_COLUMNS + baseline_columns
         )
 
-    base_group_columns = group_columns[:-1]
     rows = []
 
-    for keys, group in baselines.groupby(base_group_columns, dropna=False):
-        base_keys = tuple(keys)
-        rows.append(
-            build_baseline_summary_row(
-                base_keys + (ALL_CONFIDENCE_LEVEL,),
-                group,
-                group_columns,
-                "symbol_factor",
-            )
+    for row_type, group_columns, fixed_values in SUMMARY_GROUP_SPECS:
+        baseline_group_columns = [
+            column
+            for column in group_columns
+            if column != "confidence_level"
+        ]
+        confidence_values = (
+            confidence_levels
+            if "confidence_level" in group_columns
+            else [ALL_CONFIDENCE_LEVEL]
         )
-        for confidence_level in confidence_levels:
-            rows.append(
-                build_baseline_summary_row(
-                    base_keys + (confidence_level,),
-                    group,
-                    group_columns,
-                    "symbol_factor_confidence",
-                )
-            )
-
-    for keys, group in baselines.groupby(
-        [
-            "factor_id",
-            "factor_name",
-            "lookahead_days",
-        ],
-        dropna=False,
-    ):
-        base_keys = ("ALL_SYMBOLS",) + tuple(keys)
-        rows.append(
-            build_baseline_summary_row(
-                base_keys + (ALL_CONFIDENCE_LEVEL,),
-                group,
-                group_columns,
-                "all_symbols_factor",
-            )
-        )
-        for confidence_level in confidence_levels:
-            rows.append(
-                build_baseline_summary_row(
-                    base_keys + (confidence_level,),
-                    group,
-                    group_columns,
-                    "all_symbols_factor_confidence",
-                )
-            )
-
-    for lookahead_days, group in baselines.groupby(
-        "lookahead_days",
-        dropna=False,
-    ):
-        base_keys = (
-            "ALL_SYMBOLS",
-            "ALL_FACTORS",
-            "all_factors",
-            lookahead_days,
-        )
-        rows.append(
-            build_baseline_summary_row(
-                base_keys + (ALL_CONFIDENCE_LEVEL,),
-                group,
-                group_columns,
-                "all_symbols_all_factors",
-            )
-        )
-        for confidence_level in confidence_levels:
-            rows.append(
-                build_baseline_summary_row(
-                    base_keys + (confidence_level,),
-                    group,
-                    group_columns,
-                    "all_symbols_all_factors_confidence",
-                )
-            )
+        for values, group in iter_group_values(baselines, baseline_group_columns):
+            values.update(fixed_values)
+            for confidence_level in confidence_values:
+                values = values.copy()
+                values["confidence_level"] = confidence_level
+                rows.append(build_baseline_summary_row(values, group, row_type))
 
     return pd.DataFrame(rows)
 
 
-def build_baseline_summary_row(keys, group, group_columns, row_type):
+def build_baseline_summary_row(values, group, row_type):
     baseline_events = int(group["baseline_events"].sum())
     baseline_win_events = int(group["baseline_win_events"].sum())
 
@@ -1150,7 +940,7 @@ def build_baseline_summary_row(keys, group, group_columns, row_type):
     else:
         baseline_win_rate = np.nan
 
-    row = dict(zip(group_columns, keys))
+    row = {column: values.get(column) for column in SUMMARY_GROUP_COLUMNS}
     row.update({
         "row_type": row_type,
         "baseline_events": baseline_events,
@@ -1160,23 +950,10 @@ def build_baseline_summary_row(keys, group, group_columns, row_type):
     return row
 
 
-def build_summary_row(keys, group, group_columns, row_type):
+def build_summary_row(values, group, row_type):
     evaluable = group[group["is_evaluable"]].copy()
     event_count = len(group)
     evaluable_count = len(evaluable)
-    mean_confidence_score = (
-        pd.to_numeric(evaluable["confidence_score"], errors="coerce").mean()
-        if "confidence_score" in evaluable.columns
-        else np.nan
-    )
-    mean_confidence_signal_days = (
-        pd.to_numeric(
-            evaluable["confidence_signal_days"],
-            errors="coerce",
-        ).mean()
-        if "confidence_signal_days" in evaluable.columns
-        else np.nan
-    )
 
     if evaluable_count:
         win_count = int(evaluable["win"].sum())
@@ -1185,7 +962,7 @@ def build_summary_row(keys, group, group_columns, row_type):
         win_count = 0
         win_rate = np.nan
 
-    row = dict(zip(group_columns, keys))
+    row = {column: values.get(column) for column in SUMMARY_GROUP_COLUMNS}
     row.update({
         "row_type": row_type,
         "cluster_events": event_count,
@@ -1193,8 +970,6 @@ def build_summary_row(keys, group, group_columns, row_type):
         "win_events": win_count,
         "win_rate": win_rate,
         "mean_drawdown_threshold": evaluable["drawdown_threshold"].mean(),
-        "mean_confidence_score": mean_confidence_score,
-        "mean_confidence_signal_days": mean_confidence_signal_days,
         "strategy_observation_end_drawdown": (
             evaluable["observation_end_drawdown"].max()
         ),
@@ -1238,7 +1013,7 @@ def build_output_events(events):
     return output[[col for col in columns if col in output.columns]]
 
 
-def build_output_summary(summary, include_confidence=False):
+def build_output_summary(summary):
     output = summary.copy()
     output = output.rename(
         columns={
@@ -1252,32 +1027,7 @@ def build_output_summary(summary, include_confidence=False):
             "baseline_win_events": "baseline_wins",
         }
     )
-    columns = [
-        "row_type",
-        "symbol",
-        "factor_id",
-        "factor_name",
-        "lookahead_days",
-        "signal_clusters",
-        "strategy_samples",
-        "strategy_wins",
-        "threshold",
-        "strategy_win_rate",
-        "baseline_samples",
-        "baseline_wins",
-        "baseline_win_rate",
-        "win_rate_diff",
-        "strategy_observation_end_drawdown",
-        "strategy_observation_max_drawdown",
-    ]
-    if include_confidence:
-        insert_at = columns.index("signal_clusters")
-        columns[insert_at:insert_at] = [
-            "confidence_level",
-            "mean_confidence_score",
-            "mean_confidence_signal_days",
-        ]
-    return output[[col for col in columns if col in output.columns]]
+    return output[SUMMARY_OUTPUT_COLUMNS]
 
 
 def save_outputs(events, summary, output_dir):
@@ -1289,23 +1039,16 @@ def save_outputs(events, summary, output_dir):
 
     events_path = events_dir / "signal_cluster_events.csv"
     summary_output = build_output_summary(summary)
-    confidence_summary_output = build_output_summary(
-        summary,
-        include_confidence=True,
-    )
     summary_paths = {}
 
     build_output_events(events).to_csv(events_path, index=False)
+    for old_summary_path in summary_dir.glob("*.csv"):
+        old_summary_path.unlink()
 
     for table_name, row_type, filename in SUMMARY_TABLE_SPECS:
         table_path = summary_dir / filename
-        output = (
-            confidence_summary_output
-            if "confidence" in table_name
-            else summary_output
-        )
-        summary_table = output[
-            output["row_type"].eq(row_type)
+        summary_table = summary_output[
+            summary["row_type"].eq(row_type).to_numpy()
         ].copy()
         summary_table.to_csv(table_path, index=False)
         summary_paths[table_name] = table_path
@@ -1523,20 +1266,11 @@ def main():
     print(f"总览汇总：{output_paths['summary']['overall']}", flush=True)
     print(f"因子汇总：{output_paths['summary']['factor']}", flush=True)
     print(
-        f"品种-因子汇总：{output_paths['summary']['symbol_factor']}",
-        flush=True,
-    )
-    print(
         f"总览-置信度汇总：{output_paths['summary']['overall_confidence']}",
         flush=True,
     )
     print(
         f"因子-置信度汇总：{output_paths['summary']['factor_confidence']}",
-        flush=True,
-    )
-    print(
-        "品种-因子-置信度汇总："
-        f"{output_paths['summary']['symbol_factor_confidence']}",
         flush=True,
     )
     print(f"置信度回看窗口：{args.confidence_window_days} 个交易日", flush=True)
