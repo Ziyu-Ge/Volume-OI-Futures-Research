@@ -15,8 +15,48 @@ DEFAULT_FACTOR_IDS = "11,12,13,14"
 DEFAULT_LOOKAHEAD_DAYS_LIST = "3,5,10"
 DEFAULT_CLUSTER_MAX_GAP = 10
 DEFAULT_VOLATILITY_WINDOW = 20
-DEFAULT_VOLATILITY_MULTIPLIER = 2.0
+DEFAULT_VOLATILITY_MULTIPLIER = 1.0
 DEFAULT_VOLATILITY_MIN_HISTORY_DAYS = 20
+DEFAULT_CONFIDENCE_WINDOW_DAYS = 10
+CONFIDENCE_FULL_SIGNAL_DAYS = 4
+ALL_CONFIDENCE_LEVEL = "ALL_CONFIDENCE"
+NO_CONFIDENCE_LEVEL = "none"
+UNKNOWN_CONFIDENCE_LEVEL = "unknown"
+CONFIDENCE_LEVELS = ("low", "medium", "high")
+CONFIDENCE_LEVEL_ORDER = {
+    level: index
+    for index, level in enumerate(CONFIDENCE_LEVELS)
+}
+CONFIDENCE_LEVEL_ORDER[NO_CONFIDENCE_LEVEL] = len(CONFIDENCE_LEVEL_ORDER)
+CONFIDENCE_LEVEL_ORDER[UNKNOWN_CONFIDENCE_LEVEL] = len(CONFIDENCE_LEVEL_ORDER)
+CONFIDENCE_LEVEL_ALIASES = {
+    "none": NO_CONFIDENCE_LEVEL,
+    "no": NO_CONFIDENCE_LEVEL,
+    "0": NO_CONFIDENCE_LEVEL,
+    "l": "low",
+    "low": "low",
+    "低": "low",
+    "低置信度": "low",
+    "m": "medium",
+    "mid": "medium",
+    "med": "medium",
+    "medium": "medium",
+    "中": "medium",
+    "中置信度": "medium",
+    "h": "high",
+    "high": "high",
+    "高": "high",
+    "高置信度": "high",
+}
+CONFIDENCE_LEVEL_SOURCE_COLUMNS = ("confidence_level",)
+CONFIDENCE_SCORE_SOURCE_COLUMNS = ("confidence_score", "confidence")
+CONFIDENCE_INPUT_COLUMNS = (
+    "confidence_level",
+    "confidence",
+    "confidence_score",
+    "confidence_signal_days",
+    "confidence_recent_dates",
+)
 SUMMARY_TABLE_SPECS = (
     (
         "overall",
@@ -32,6 +72,21 @@ SUMMARY_TABLE_SPECS = (
         "symbol_factor",
         "symbol_factor",
         "symbol_factor_by_lookahead.csv",
+    ),
+    (
+        "overall_confidence",
+        "all_symbols_all_factors_confidence",
+        "overall_by_confidence.csv",
+    ),
+    (
+        "factor_confidence",
+        "all_symbols_factor_confidence",
+        "factor_by_confidence.csv",
+    ),
+    (
+        "symbol_factor_confidence",
+        "symbol_factor_confidence",
+        "symbol_factor_by_confidence.csv",
     ),
 )
 
@@ -74,6 +129,165 @@ def parse_int_list(raw_value):
         if item.strip()
     ]
     return values or None
+
+
+def first_existing_column(frame, columns):
+    return next((column for column in columns if column in frame.columns), None)
+
+
+def normalize_confidence_text(value):
+    if pd.isna(value):
+        return UNKNOWN_CONFIDENCE_LEVEL
+
+    text = str(value).strip().lower()
+    text = text.replace("-", "_").replace(" ", "_")
+    return CONFIDENCE_LEVEL_ALIASES.get(text, UNKNOWN_CONFIDENCE_LEVEL)
+
+
+def confidence_score_to_level(value):
+    score = pd.to_numeric(value, errors="coerce")
+    if pd.isna(score) or score < 0:
+        return UNKNOWN_CONFIDENCE_LEVEL
+
+    if score <= 1:
+        normalized_score = score
+    elif score <= 100:
+        normalized_score = score / 100
+    else:
+        return UNKNOWN_CONFIDENCE_LEVEL
+
+    if normalized_score <= 0:
+        return NO_CONFIDENCE_LEVEL
+    if normalized_score < 0.5:
+        return "low"
+    if normalized_score < 1:
+        return "medium"
+    return "high"
+
+
+def normalize_confidence_level(value):
+    text_level = normalize_confidence_text(value)
+    if text_level != UNKNOWN_CONFIDENCE_LEVEL:
+        return text_level
+
+    return confidence_score_to_level(value)
+
+
+def confidence_level_sort_value(value):
+    return CONFIDENCE_LEVEL_ORDER.get(
+        normalize_confidence_level(value),
+        len(CONFIDENCE_LEVEL_ORDER),
+    )
+
+
+def ordered_confidence_levels(values):
+    levels = {
+        normalize_confidence_level(value)
+        for value in values
+    }
+    return sorted(levels, key=confidence_level_sort_value)
+
+
+def confidence_level_from_signal_days(signal_day_count):
+    if signal_day_count >= CONFIDENCE_FULL_SIGNAL_DAYS:
+        return "high"
+    if signal_day_count >= 2:
+        return "medium"
+    if signal_day_count >= 1:
+        return "low"
+
+    return NO_CONFIDENCE_LEVEL
+
+
+def format_date_list(date_values):
+    return ",".join(
+        pd.Timestamp(value).strftime("%Y-%m-%d")
+        for value in date_values
+    )
+
+
+def load_confidence_source_frame(file_info):
+    columns = {"date", "signal"}
+    daily = pd.read_csv(
+        file_info["path"],
+        usecols=lambda col: col in columns,
+    )
+    if not columns.issubset(daily.columns):
+        return None
+
+    daily = daily[["date", "signal"]].copy()
+    daily["date"] = pd.to_datetime(daily["date"])
+    daily["signal"] = (
+        pd.to_numeric(daily["signal"], errors="coerce")
+        .fillna(0)
+        .astype(int)
+    )
+    return daily.dropna(subset=["date"]).sort_values("date")
+
+
+def build_symbol_confidence_by_date(symbol_frames, lookback_days):
+    all_dates = sorted({
+        value
+        for frame in symbol_frames
+        for value in frame["date"].dropna()
+    })
+    if not all_dates:
+        return {}
+
+    signal_dates = {
+        value
+        for frame in symbol_frames
+        for value in frame.loc[frame["signal"] == 1, "date"].dropna()
+    }
+    lookback_days = max(int(lookback_days), 1)
+    confidence_by_date = {}
+
+    for index, current_date in enumerate(all_dates):
+        window_start = max(0, index - lookback_days + 1)
+        window_dates = all_dates[window_start:index + 1]
+        recent_signal_dates = [
+            value
+            for value in window_dates
+            if value in signal_dates
+        ]
+        signal_day_count = len(recent_signal_dates)
+        confidence_score = min(
+            signal_day_count / CONFIDENCE_FULL_SIGNAL_DAYS,
+            1.0,
+        )
+
+        confidence_by_date[current_date] = {
+            "confidence_score": confidence_score,
+            "confidence_signal_days": signal_day_count,
+            "confidence_level": confidence_level_from_signal_days(
+                signal_day_count
+            ),
+            "confidence_recent_dates": format_date_list(recent_signal_dates),
+        }
+
+    return confidence_by_date
+
+
+def build_confidence_by_symbol_date(factor_files, lookback_days):
+    frames_by_symbol = {}
+
+    for file_info in factor_files:
+        try:
+            daily = load_confidence_source_frame(file_info)
+        except Exception:
+            continue
+        if daily is None:
+            continue
+
+        frames_by_symbol.setdefault(file_info["symbol"], []).append(daily)
+
+    return {
+        symbol: build_symbol_confidence_by_date(
+            symbol_frames=frames,
+            lookback_days=lookback_days,
+        )
+        for symbol, frames in frames_by_symbol.items()
+    }
 
 
 def parse_factor_file(path):
@@ -121,8 +335,144 @@ def discover_factor_files(runs_dir, symbols=None, factor_ids=None):
     return factor_files
 
 
-def load_factor_daily(file_info, price_column):
-    columns = ["date", price_column, "factor_id", "factor_name", "signal"]
+def load_signal_confidence(file_info):
+    signal_path = (
+        file_info["path"].parents[1]
+        / "signals"
+        / f"{file_info['symbol']}_{file_info['factor_id']}_"
+        f"{file_info['factor_name']}_signals.csv"
+    )
+    if not signal_path.is_file():
+        return None
+
+    columns = {"date", "signal_date", *CONFIDENCE_INPUT_COLUMNS}
+    signals = pd.read_csv(
+        signal_path,
+        usecols=lambda col: col in columns,
+    )
+    date_column = first_existing_column(signals, ("signal_date", "date"))
+    confidence_columns = [
+        column
+        for column in CONFIDENCE_INPUT_COLUMNS
+        if column in signals.columns
+    ]
+    if date_column is None or not confidence_columns:
+        return None
+
+    signals = signals[[date_column] + confidence_columns].copy()
+    signals = signals.rename(columns={date_column: "date"})
+    signals["date"] = pd.to_datetime(signals["date"])
+    return signals.drop_duplicates("date", keep="last")
+
+
+def merge_signal_confidence(daily, file_info):
+    signal_confidence = load_signal_confidence(file_info)
+    if signal_confidence is None:
+        return daily
+
+    daily = daily.merge(
+        signal_confidence,
+        on="date",
+        how="left",
+        suffixes=("", "_signal"),
+    )
+    for column in CONFIDENCE_INPUT_COLUMNS:
+        signal_column = f"{column}_signal"
+        if signal_column not in daily.columns:
+            continue
+
+        if column in daily.columns:
+            daily[column] = daily[column].where(
+                daily[column].notna(),
+                daily[signal_column],
+            )
+        else:
+            daily[column] = daily[signal_column]
+        daily = daily.drop(columns=[signal_column])
+
+    return daily
+
+
+def apply_computed_signal_confidence(daily, confidence_by_date):
+    if not confidence_by_date:
+        return daily
+
+    daily = daily.copy()
+    confidence_values = daily["date"].map(
+        lambda value: confidence_by_date.get(pd.Timestamp(value), {})
+    )
+    computed_level = confidence_values.map(
+        lambda item: item.get("confidence_level", UNKNOWN_CONFIDENCE_LEVEL)
+    ).map(normalize_confidence_level)
+    computed_score = confidence_values.map(
+        lambda item: item.get("confidence_score", np.nan)
+    )
+    computed_signal_days = confidence_values.map(
+        lambda item: item.get("confidence_signal_days", np.nan)
+    )
+    computed_recent_dates = confidence_values.map(
+        lambda item: item.get("confidence_recent_dates", "")
+    )
+    computed_level_available = computed_level.ne(UNKNOWN_CONFIDENCE_LEVEL)
+    computed_score = pd.to_numeric(computed_score, errors="coerce")
+    computed_signal_days = pd.to_numeric(computed_signal_days, errors="coerce")
+
+    if "confidence_level" in daily.columns:
+        existing_level = daily["confidence_level"].map(normalize_confidence_level)
+        daily["confidence_level"] = computed_level.where(
+            computed_level_available,
+            existing_level,
+        )
+    else:
+        daily["confidence_level"] = computed_level
+
+    if "confidence_score" in daily.columns:
+        existing_score = pd.to_numeric(
+            daily["confidence_score"],
+            errors="coerce",
+        )
+        daily["confidence_score"] = computed_score.where(
+            computed_score.notna(),
+            existing_score,
+        )
+    else:
+        daily["confidence_score"] = computed_score
+
+    if "confidence_signal_days" in daily.columns:
+        existing_signal_days = pd.to_numeric(
+            daily["confidence_signal_days"],
+            errors="coerce",
+        )
+        daily["confidence_signal_days"] = computed_signal_days.where(
+            computed_signal_days.notna(),
+            existing_signal_days,
+        )
+    else:
+        daily["confidence_signal_days"] = computed_signal_days
+
+    if "confidence_recent_dates" in daily.columns:
+        existing_recent_dates = (
+            daily["confidence_recent_dates"].fillna("").astype(str)
+        )
+        daily["confidence_recent_dates"] = computed_recent_dates.where(
+            computed_recent_dates.ne(""),
+            existing_recent_dates,
+        )
+    else:
+        daily["confidence_recent_dates"] = computed_recent_dates
+
+    return daily
+
+
+def load_factor_daily(file_info, price_column, confidence_by_date=None):
+    columns = {
+        "date",
+        price_column,
+        "factor_id",
+        "factor_name",
+        "signal",
+        *CONFIDENCE_INPUT_COLUMNS,
+    }
     daily = pd.read_csv(
         file_info["path"],
         usecols=lambda col: col in columns,
@@ -137,11 +487,56 @@ def load_factor_daily(file_info, price_column):
 
     daily["date"] = pd.to_datetime(daily["date"])
     daily[price_column] = pd.to_numeric(daily[price_column], errors="coerce")
+    daily = merge_signal_confidence(daily, file_info)
     daily["signal"] = (
         pd.to_numeric(daily["signal"], errors="coerce")
         .fillna(0)
         .astype(int)
     )
+
+    confidence_level_column = first_existing_column(
+        daily,
+        CONFIDENCE_LEVEL_SOURCE_COLUMNS,
+    )
+    confidence_score_column = first_existing_column(
+        daily,
+        CONFIDENCE_SCORE_SOURCE_COLUMNS,
+    )
+    if confidence_level_column is not None:
+        daily["confidence_level"] = daily[confidence_level_column].map(
+            normalize_confidence_level
+        )
+    elif confidence_score_column is not None:
+        daily["confidence_level"] = daily[confidence_score_column].map(
+            normalize_confidence_level
+        )
+    else:
+        daily["confidence_level"] = UNKNOWN_CONFIDENCE_LEVEL
+
+    if confidence_score_column is not None:
+        daily["confidence_score"] = pd.to_numeric(
+            daily[confidence_score_column],
+            errors="coerce",
+        )
+    else:
+        daily["confidence_score"] = np.nan
+
+    if "confidence_signal_days" in daily.columns:
+        daily["confidence_signal_days"] = pd.to_numeric(
+            daily["confidence_signal_days"],
+            errors="coerce",
+        )
+    else:
+        daily["confidence_signal_days"] = np.nan
+
+    if "confidence_recent_dates" in daily.columns:
+        daily["confidence_recent_dates"] = (
+            daily["confidence_recent_dates"].fillna("").astype(str)
+        )
+    else:
+        daily["confidence_recent_dates"] = ""
+
+    daily = apply_computed_signal_confidence(daily, confidence_by_date)
     daily = daily.sort_values("date").reset_index(drop=True)
 
     daily["symbol"] = file_info["symbol"]
@@ -223,6 +618,15 @@ def evaluate_cluster(daily, cluster_positions, args, lookahead_days):
         "event_date": event_row["date"].date().isoformat(),
         "event_price": event_price,
         "cluster_signal_days": len(cluster_positions),
+        "confidence_level": normalize_confidence_level(
+            event_row.get("confidence_level", UNKNOWN_CONFIDENCE_LEVEL)
+        ),
+        "confidence_score": event_row.get("confidence_score", np.nan),
+        "confidence_signal_days": event_row.get(
+            "confidence_signal_days",
+            np.nan,
+        ),
+        "confidence_recent_dates": event_row.get("confidence_recent_dates", ""),
         "lookahead_days": lookahead_days,
         "drawdown_threshold": drawdown_threshold,
         "is_evaluable": bool(is_evaluable),
@@ -431,7 +835,12 @@ def plot_signal_clusters(daily, clusters, event_rows, args, lookahead_days):
 
 
 def evaluate_factor_file(file_info, args):
-    daily = load_factor_daily(file_info, args.price_column)
+    confidence_by_symbol_date = getattr(args, "confidence_by_symbol_date", {})
+    daily = load_factor_daily(
+        file_info,
+        args.price_column,
+        confidence_by_date=confidence_by_symbol_date.get(file_info["symbol"]),
+    )
     daily = add_threshold_features(daily, args)
     clusters = iter_signal_clusters(daily, args.cluster_max_gap)
     event_rows = []
@@ -497,16 +906,34 @@ def summarize_events(events, baselines):
     if events.empty:
         return pd.DataFrame()
 
-    group_columns = [
+    if "confidence_level" not in events.columns:
+        events = events.copy()
+        events["confidence_level"] = UNKNOWN_CONFIDENCE_LEVEL
+
+    base_group_columns = [
         "symbol",
         "factor_id",
         "factor_name",
         "lookahead_days",
     ]
+    group_columns = base_group_columns + ["confidence_level"]
+    confidence_levels = ordered_confidence_levels(
+        events["confidence_level"]
+        .dropna()
+        .astype(str)
+        .unique()
+    )
     rows = []
 
-    for keys, group in events.groupby(group_columns, dropna=False):
-        rows.append(build_summary_row(keys, group, group_columns, "symbol_factor"))
+    for keys, group in events.groupby(base_group_columns, dropna=False):
+        rows.append(
+            build_summary_row(
+                tuple(keys) + (ALL_CONFIDENCE_LEVEL,),
+                group,
+                group_columns,
+                "symbol_factor",
+            )
+        )
 
     for keys, group in events.groupby(
         [
@@ -516,7 +943,7 @@ def summarize_events(events, baselines):
         ],
         dropna=False,
     ):
-        full_keys = ("ALL_SYMBOLS",) + tuple(keys)
+        full_keys = ("ALL_SYMBOLS",) + tuple(keys) + (ALL_CONFIDENCE_LEVEL,)
         rows.append(
             build_summary_row(
                 full_keys,
@@ -532,6 +959,7 @@ def summarize_events(events, baselines):
             "ALL_FACTORS",
             "all_factors",
             lookahead_days,
+            ALL_CONFIDENCE_LEVEL,
         )
         rows.append(
             build_summary_row(
@@ -542,8 +970,62 @@ def summarize_events(events, baselines):
             )
         )
 
+    for keys, group in events.groupby(group_columns, dropna=False):
+        rows.append(
+            build_summary_row(
+                keys,
+                group,
+                group_columns,
+                "symbol_factor_confidence",
+            )
+        )
+
+    for keys, group in events.groupby(
+        [
+            "factor_id",
+            "factor_name",
+            "lookahead_days",
+            "confidence_level",
+        ],
+        dropna=False,
+    ):
+        full_keys = ("ALL_SYMBOLS",) + tuple(keys)
+        rows.append(
+            build_summary_row(
+                full_keys,
+                group,
+                group_columns,
+                "all_symbols_factor_confidence",
+            )
+        )
+
+    for keys, group in events.groupby(
+        ["lookahead_days", "confidence_level"],
+        dropna=False,
+    ):
+        lookahead_days, confidence_level = keys
+        full_keys = (
+            "ALL_SYMBOLS",
+            "ALL_FACTORS",
+            "all_factors",
+            lookahead_days,
+            confidence_level,
+        )
+        rows.append(
+            build_summary_row(
+                full_keys,
+                group,
+                group_columns,
+                "all_symbols_all_factors_confidence",
+            )
+        )
+
     summary = pd.DataFrame(rows)
-    baseline_summary = summarize_baselines(baselines, group_columns)
+    baseline_summary = summarize_baselines(
+        baselines,
+        group_columns,
+        confidence_levels,
+    )
     summary = summary.merge(
         baseline_summary,
         on=["row_type"] + group_columns,
@@ -552,23 +1034,54 @@ def summarize_events(events, baselines):
     summary["win_rate_lift"] = (
         summary["win_rate"] - summary["baseline_win_rate"]
     )
-    return summary.sort_values(
-        ["row_type", "symbol", "factor_id", "lookahead_days"]
+    summary["_confidence_sort"] = summary["confidence_level"].map(
+        confidence_level_sort_value
     )
+    summary = summary.sort_values(
+        [
+            "row_type",
+            "symbol",
+            "factor_id",
+            "lookahead_days",
+            "_confidence_sort",
+        ]
+    )
+    return summary.drop(columns=["_confidence_sort"])
 
 
-def summarize_baselines(baselines, group_columns):
+def summarize_baselines(baselines, group_columns, confidence_levels):
+    baseline_columns = [
+        "baseline_events",
+        "baseline_win_events",
+        "baseline_win_rate",
+    ]
+    if baselines.empty:
+        return pd.DataFrame(
+            columns=["row_type"] + group_columns + baseline_columns
+        )
+
+    base_group_columns = group_columns[:-1]
     rows = []
 
-    for keys, group in baselines.groupby(group_columns, dropna=False):
+    for keys, group in baselines.groupby(base_group_columns, dropna=False):
+        base_keys = tuple(keys)
         rows.append(
             build_baseline_summary_row(
-                keys,
+                base_keys + (ALL_CONFIDENCE_LEVEL,),
                 group,
                 group_columns,
                 "symbol_factor",
             )
         )
+        for confidence_level in confidence_levels:
+            rows.append(
+                build_baseline_summary_row(
+                    base_keys + (confidence_level,),
+                    group,
+                    group_columns,
+                    "symbol_factor_confidence",
+                )
+            )
 
     for keys, group in baselines.groupby(
         [
@@ -578,21 +1091,30 @@ def summarize_baselines(baselines, group_columns):
         ],
         dropna=False,
     ):
-        full_keys = ("ALL_SYMBOLS",) + tuple(keys)
+        base_keys = ("ALL_SYMBOLS",) + tuple(keys)
         rows.append(
             build_baseline_summary_row(
-                full_keys,
+                base_keys + (ALL_CONFIDENCE_LEVEL,),
                 group,
                 group_columns,
                 "all_symbols_factor",
             )
         )
+        for confidence_level in confidence_levels:
+            rows.append(
+                build_baseline_summary_row(
+                    base_keys + (confidence_level,),
+                    group,
+                    group_columns,
+                    "all_symbols_factor_confidence",
+                )
+            )
 
     for lookahead_days, group in baselines.groupby(
         "lookahead_days",
         dropna=False,
     ):
-        full_keys = (
+        base_keys = (
             "ALL_SYMBOLS",
             "ALL_FACTORS",
             "all_factors",
@@ -600,12 +1122,21 @@ def summarize_baselines(baselines, group_columns):
         )
         rows.append(
             build_baseline_summary_row(
-                full_keys,
+                base_keys + (ALL_CONFIDENCE_LEVEL,),
                 group,
                 group_columns,
                 "all_symbols_all_factors",
             )
         )
+        for confidence_level in confidence_levels:
+            rows.append(
+                build_baseline_summary_row(
+                    base_keys + (confidence_level,),
+                    group,
+                    group_columns,
+                    "all_symbols_all_factors_confidence",
+                )
+            )
 
     return pd.DataFrame(rows)
 
@@ -633,6 +1164,19 @@ def build_summary_row(keys, group, group_columns, row_type):
     evaluable = group[group["is_evaluable"]].copy()
     event_count = len(group)
     evaluable_count = len(evaluable)
+    mean_confidence_score = (
+        pd.to_numeric(evaluable["confidence_score"], errors="coerce").mean()
+        if "confidence_score" in evaluable.columns
+        else np.nan
+    )
+    mean_confidence_signal_days = (
+        pd.to_numeric(
+            evaluable["confidence_signal_days"],
+            errors="coerce",
+        ).mean()
+        if "confidence_signal_days" in evaluable.columns
+        else np.nan
+    )
 
     if evaluable_count:
         win_count = int(evaluable["win"].sum())
@@ -649,6 +1193,8 @@ def build_summary_row(keys, group, group_columns, row_type):
         "win_events": win_count,
         "win_rate": win_rate,
         "mean_drawdown_threshold": evaluable["drawdown_threshold"].mean(),
+        "mean_confidence_score": mean_confidence_score,
+        "mean_confidence_signal_days": mean_confidence_signal_days,
         "strategy_observation_end_drawdown": (
             evaluable["observation_end_drawdown"].max()
         ),
@@ -679,6 +1225,10 @@ def build_output_events(events):
         "signal_date",
         "signal_close",
         "cluster_signal_days",
+        "confidence_level",
+        "confidence_score",
+        "confidence_signal_days",
+        "confidence_recent_dates",
         "threshold",
         "strategy_observation_end_drawdown",
         "strategy_observation_max_drawdown",
@@ -688,7 +1238,7 @@ def build_output_events(events):
     return output[[col for col in columns if col in output.columns]]
 
 
-def build_output_summary(summary):
+def build_output_summary(summary, include_confidence=False):
     output = summary.copy()
     output = output.rename(
         columns={
@@ -720,6 +1270,13 @@ def build_output_summary(summary):
         "strategy_observation_end_drawdown",
         "strategy_observation_max_drawdown",
     ]
+    if include_confidence:
+        insert_at = columns.index("signal_clusters")
+        columns[insert_at:insert_at] = [
+            "confidence_level",
+            "mean_confidence_score",
+            "mean_confidence_signal_days",
+        ]
     return output[[col for col in columns if col in output.columns]]
 
 
@@ -732,14 +1289,23 @@ def save_outputs(events, summary, output_dir):
 
     events_path = events_dir / "signal_cluster_events.csv"
     summary_output = build_output_summary(summary)
+    confidence_summary_output = build_output_summary(
+        summary,
+        include_confidence=True,
+    )
     summary_paths = {}
 
     build_output_events(events).to_csv(events_path, index=False)
 
     for table_name, row_type, filename in SUMMARY_TABLE_SPECS:
         table_path = summary_dir / filename
-        summary_table = summary_output[
-            summary_output["row_type"].eq(row_type)
+        output = (
+            confidence_summary_output
+            if "confidence" in table_name
+            else summary_output
+        )
+        summary_table = output[
+            output["row_type"].eq(row_type)
         ].copy()
         summary_table.to_csv(table_path, index=False)
         summary_paths[table_name] = table_path
@@ -755,7 +1321,8 @@ def main():
         description=(
             "用信号簇最后一天评估信号胜率："
             "未来窗口最后一天相对事件日的回撤达到"
-            "前 20 日平均波动率两倍即算胜。"
+            "前 20 日平均波动率一倍即算胜，"
+            "并按置信度分档输出胜率。"
         )
     )
     parser.add_argument(
@@ -805,7 +1372,7 @@ def main():
         default=DEFAULT_VOLATILITY_WINDOW,
         help=(
             "计算前 N 日平均绝对日收益率，默认：20；"
-            "胜负阈值固定为该均值的 2 倍。"
+            "胜负阈值固定为该均值的 1 倍。"
         ),
     )
     parser.add_argument(
@@ -821,6 +1388,16 @@ def main():
         help=(
             "两个信号之间最多允许隔多少个无信号交易日仍算同一簇，"
             f"默认：{DEFAULT_CLUSTER_MAX_GAP}；设为 -1 表示每个信号单独计票。"
+        ),
+    )
+    parser.add_argument(
+        "--confidence-window-days",
+        type=int,
+        default=DEFAULT_CONFIDENCE_WINDOW_DAYS,
+        help=(
+            "按同一品种所有选中因子的信号日期计算置信度时，"
+            "回看多少个交易日，默认："
+            f"{DEFAULT_CONFIDENCE_WINDOW_DAYS}。"
         ),
     )
     parser.add_argument(
@@ -850,6 +1427,8 @@ def main():
         raise ValueError("volatility-window 必须为正整数。")
     if args.volatility_min_history_days <= 0:
         raise ValueError("volatility-min-history-days 必须为正整数。")
+    if args.confidence_window_days <= 0:
+        raise ValueError("confidence-window-days 必须为正整数。")
 
     runs_dir = args.runs_dir.resolve()
     output_dir = args.output_dir.resolve()
@@ -861,6 +1440,10 @@ def main():
         runs_dir=runs_dir,
         symbols=symbols,
         factor_ids=factor_ids,
+    )
+    args.confidence_by_symbol_date = build_confidence_by_symbol_date(
+        factor_files=factor_files,
+        lookback_days=args.confidence_window_days,
     )
 
     rows = []
@@ -910,6 +1493,32 @@ def main():
             f"{row['strategy_observation_max_drawdown']:.2%}",
             flush=True,
         )
+
+    confidence_aggregate = (
+        summary[summary["row_type"] == "all_symbols_all_factors_confidence"]
+        .copy()
+    )
+    if not confidence_aggregate.empty:
+        confidence_aggregate["_confidence_sort"] = (
+            confidence_aggregate["confidence_level"]
+            .map(confidence_level_sort_value)
+        )
+        confidence_aggregate = confidence_aggregate.sort_values(
+            ["lookahead_days", "_confidence_sort"]
+        )
+        print("按置信度汇总：", flush=True)
+        for _, row in confidence_aggregate.iterrows():
+            print(
+                "观察窗口："
+                f"{int(row['lookahead_days'])} 日；"
+                f"置信度：{row['confidence_level']}；"
+                f"信号簇事件：{int(row['cluster_events'])}；"
+                f"可评价：{int(row['evaluable_events'])}；"
+                f"策略胜率：{row['win_rate']:.2%}；"
+                f"基准胜率：{row['baseline_win_rate']:.2%}；"
+                f"胜率差：{row['win_rate_lift']:.2%}",
+                flush=True,
+            )
     print(f"事件明细：{output_paths['events']}", flush=True)
     print(f"总览汇总：{output_paths['summary']['overall']}", flush=True)
     print(f"因子汇总：{output_paths['summary']['factor']}", flush=True)
@@ -917,6 +1526,20 @@ def main():
         f"品种-因子汇总：{output_paths['summary']['symbol_factor']}",
         flush=True,
     )
+    print(
+        f"总览-置信度汇总：{output_paths['summary']['overall_confidence']}",
+        flush=True,
+    )
+    print(
+        f"因子-置信度汇总：{output_paths['summary']['factor_confidence']}",
+        flush=True,
+    )
+    print(
+        "品种-因子-置信度汇总："
+        f"{output_paths['summary']['symbol_factor_confidence']}",
+        flush=True,
+    )
+    print(f"置信度回看窗口：{args.confidence_window_days} 个交易日", flush=True)
     if not args.skip_plots:
         print(f"信号图数量：{len(plot_paths)}", flush=True)
         print(
