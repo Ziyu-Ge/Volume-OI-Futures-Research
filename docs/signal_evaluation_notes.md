@@ -3,17 +3,17 @@
 本文档对应当前三套评估脚本：
 
 ```text
-code/backtest/evaluate_signal_win_rate.py
-code/backtest/evaluate_signal_win_rate_cluster_last_day.py
-code/backtest/evaluate_signal_win_rate_low_medium_high.py
+code/chapter1/backtest/evaluate_signal_win_rate.py
+code/chapter1/backtest/evaluate_signal_win_rate_cluster_last_day.py
+code/chapter1/backtest/evaluate_signal_win_rate_low_medium_high.py
 ```
 
 当前结果来自三个 summary 目录：
 
 ```text
-results/evaluation/tables/summary
-results/evaluation_cluster_last_day/tables/summary
-results/evaluation_low_medium_high/tables/summary
+results/chapter1/evaluation/tables/summary
+results/chapter1/evaluation_cluster_last_day/tables/summary
+results/chapter1/evaluation_low_medium_high/tables/summary
 ```
 
 ## 口径概览
@@ -32,9 +32,9 @@ results/evaluation_low_medium_high/tables/summary
 
 | 脚本 | 输出目录 | 输出重点 |
 | --- | --- | --- |
-| `evaluate_signal_win_rate.py` | `results/evaluation` | 完整输出，包括总体、分因子、总体置信度、分因子置信度 |
-| `evaluate_signal_win_rate_cluster_last_day.py` | `results/evaluation_cluster_last_day` | 只输出信号簇最后一天口径的总体和分因子汇总 |
-| `evaluate_signal_win_rate_low_medium_high.py` | `results/evaluation_low_medium_high` | 只输出 `low`、`medium`、`high` 三档置信度汇总 |
+| `evaluate_signal_win_rate.py` | `results/chapter1/evaluation` | 完整输出，包括总体、分因子、总体置信度、分因子置信度 |
+| `evaluate_signal_win_rate_cluster_last_day.py` | `results/chapter1/evaluation_cluster_last_day` | 只输出信号簇最后一天口径的总体和分因子汇总 |
+| `evaluate_signal_win_rate_low_medium_high.py` | `results/chapter1/evaluation_low_medium_high` | 只输出 `low`、`medium`、`high` 三档置信度汇总 |
 
 当前 CSV 中，`evaluation_cluster_last_day` 的 `overall_by_lookahead.csv`、`factor_by_lookahead.csv` 与 `evaluation` 中同名表完全一致；`evaluation_low_medium_high` 的两张 summary 与 `evaluation` 的置信度分层表完全一致，只是文件名更聚焦。
 
@@ -43,7 +43,7 @@ results/evaluation_low_medium_high/tables/summary
 脚本从各因子运行目录读取日频因子表：
 
 ```text
-results/{factor_run_dir}/tables/factors/{SYMBOL}_{factor_id}_{factor_name}.csv
+results/chapter1/{factor_run_dir}/tables/factors/{SYMBOL}_{factor_id}_{factor_name}.csv
 ```
 
 默认评估：
@@ -246,9 +246,9 @@ win_rate_diff_k = strategy_win_rate_k - baseline_win_rate_k
 当前 summary 目录不输出品种-因子层面的 CSV，只保留总体和因子层面的轻量汇总。若需要按品种和因子筛选，可以从事件表重新聚合：
 
 ```text
-results/evaluation/tables/events/signal_cluster_events.csv
-results/evaluation_cluster_last_day/tables/events/signal_cluster_last_day_events.csv
-results/evaluation_low_medium_high/tables/events/signal_cluster_events_low_medium_high.csv
+results/chapter1/evaluation/tables/events/signal_cluster_events.csv
+results/chapter1/evaluation_cluster_last_day/tables/events/signal_cluster_last_day_events.csv
+results/chapter1/evaluation_low_medium_high/tables/events/signal_cluster_events_low_medium_high.csv
 ```
 
 可按以下字段重新聚合：
@@ -289,7 +289,7 @@ summary 表统一保留以下字段：
 - `win_rate_diff`：信号胜率减基准胜率。
 - `strategy_observation_max_drawdown`：分组内观察窗口最大回撤的最大值。
 
-`results/evaluation/tables/summary` 输出四张表：
+`results/chapter1/evaluation/tables/summary` 输出四张表：
 
 - `overall_by_lookahead.csv`：全部品种、全部因子的总体结果。
 - `factor_by_lookahead.csv`：按因子汇总。
@@ -298,10 +298,10 @@ summary 表统一保留以下字段：
 
 两个轻量输出目录对应：
 
-- `results/evaluation_cluster_last_day/tables/summary/overall_by_lookahead.csv`
-- `results/evaluation_cluster_last_day/tables/summary/factor_by_lookahead.csv`
-- `results/evaluation_low_medium_high/tables/summary/overall_by_low_medium_high.csv`
-- `results/evaluation_low_medium_high/tables/summary/factor_by_low_medium_high.csv`
+- `results/chapter1/evaluation_cluster_last_day/tables/summary/overall_by_lookahead.csv`
+- `results/chapter1/evaluation_cluster_last_day/tables/summary/factor_by_lookahead.csv`
+- `results/chapter1/evaluation_low_medium_high/tables/summary/overall_by_low_medium_high.csv`
+- `results/chapter1/evaluation_low_medium_high/tables/summary/factor_by_low_medium_high.csv`
 
 ## 图形输出
 
@@ -325,44 +325,35 @@ summary 表统一保留以下字段：
 完整输出：
 
 ```bash
-python3 code/backtest/evaluate_signal_win_rate.py \
-  --runs-dir results \
-  --output-dir results/evaluation \
+python3 code/chapter1/backtest/evaluate_signal_win_rate.py \
+  --runs-dir results/chapter1 \
+  --output-dir results/chapter1/evaluation \
   --factor-ids 11,12,13,14
 ```
 
 只输出信号簇最后一天口径的总体和分因子结果：
 
 ```bash
-python3 code/backtest/evaluate_signal_win_rate_cluster_last_day.py \
-  --runs-dir results \
-  --output-dir results/evaluation_cluster_last_day \
+python3 code/chapter1/backtest/evaluate_signal_win_rate_cluster_last_day.py \
+  --runs-dir results/chapter1 \
+  --output-dir results/chapter1/evaluation_cluster_last_day \
   --factor-ids 11,12,13,14
 ```
 
 只输出 `low`、`medium`、`high` 分层结果：
 
 ```bash
-python3 code/backtest/evaluate_signal_win_rate_low_medium_high.py \
-  --runs-dir results \
-  --output-dir results/evaluation_low_medium_high \
+python3 code/chapter1/backtest/evaluate_signal_win_rate_low_medium_high.py \
+  --runs-dir results/chapter1 \
+  --output-dir results/chapter1/evaluation_low_medium_high \
   --factor-ids 11,12,13,14
-```
-
-只评估单个品种：
-
-```bash
-python3 code/backtest/evaluate_signal_win_rate.py \
-  --runs-dir results \
-  --output-dir /tmp/evaluation_jd \
-  --symbols JD
 ```
 
 只评估 10 日窗口：
 
 ```bash
-python3 code/backtest/evaluate_signal_win_rate.py \
-  --runs-dir results \
+python3 code/chapter1/backtest/evaluate_signal_win_rate.py \
+  --runs-dir results/chapter1 \
   --output-dir /tmp/evaluation_10d \
   --lookahead-days 10
 ```
@@ -370,8 +361,8 @@ python3 code/backtest/evaluate_signal_win_rate.py \
 只输出表格、不生成信号图：
 
 ```bash
-python3 code/backtest/evaluate_signal_win_rate.py \
-  --runs-dir results \
-  --output-dir results/evaluation \
+python3 code/chapter1/backtest/evaluate_signal_win_rate.py \
+  --runs-dir results/chapter1 \
+  --output-dir results/chapter1/evaluation \
   --skip-plots
 ```

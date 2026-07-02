@@ -1,1 +1,0 @@
-SYMBOL = "JD"

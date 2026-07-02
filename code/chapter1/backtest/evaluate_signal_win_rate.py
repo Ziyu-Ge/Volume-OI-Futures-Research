@@ -8,9 +8,9 @@ import pandas as pd
 
 BACKTEST_DIR = Path(__file__).resolve().parent
 CODE_DIR = BACKTEST_DIR.parent
-PROJECT_ROOT = CODE_DIR.parent
-DEFAULT_RUNS_DIR = PROJECT_ROOT / "results"
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "results" / "evaluation"
+PROJECT_ROOT = CODE_DIR.parents[1]
+DEFAULT_RUNS_DIR = PROJECT_ROOT / "results" / "chapter1"
+DEFAULT_OUTPUT_DIR = DEFAULT_RUNS_DIR / "evaluation"
 DEFAULT_FACTOR_IDS = "11,12,13,14"
 DEFAULT_LOOKAHEAD_DAYS_LIST = "3,5,10"
 DEFAULT_CLUSTER_MAX_GAP = 10
@@ -138,18 +138,6 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-
-
-def parse_csv_list(raw_value):
-    if raw_value is None:
-        return None
-
-    values = [
-        item.strip().upper()
-        for item in str(raw_value).split(",")
-        if item.strip()
-    ]
-    return values or None
 
 
 def parse_factor_ids(raw_value):
@@ -345,8 +333,7 @@ def parse_factor_file(path):
     }
 
 
-def discover_factor_files(runs_dir, symbols=None, factor_ids=None):
-    symbols = set(symbols) if symbols is not None else None
+def discover_factor_files(runs_dir, factor_ids=None):
     factor_ids = set(factor_ids) if factor_ids is not None else None
     factor_files = []
 
@@ -361,8 +348,6 @@ def discover_factor_files(runs_dir, symbols=None, factor_ids=None):
         for path in sorted(factors_dir.glob("*.csv")):
             metadata = parse_factor_file(path)
             if metadata is None:
-                continue
-            if symbols is not None and metadata["symbol"] not in symbols:
                 continue
             if factor_ids is not None and metadata["factor_id"] not in factor_ids:
                 continue
@@ -1086,12 +1071,6 @@ def main():
         help=f"要评估的因子 ID，逗号分隔，默认：{DEFAULT_FACTOR_IDS}",
     )
     parser.add_argument(
-        "--symbols",
-        "--symbol",
-        dest="symbols",
-        help="只评估指定品种，多个品种用逗号分隔，例如：JD,CU。",
-    )
-    parser.add_argument(
         "--price-column",
         default="close",
         help="用于评估的价格字段，默认：close。",
@@ -1176,12 +1155,10 @@ def main():
     runs_dir = args.runs_dir.resolve()
     output_dir = args.output_dir.resolve()
     args.output_dir = output_dir
-    symbols = parse_csv_list(args.symbols)
     factor_ids = parse_factor_ids(args.factor_ids)
 
     factor_files = discover_factor_files(
         runs_dir=runs_dir,
-        symbols=symbols,
         factor_ids=factor_ids,
     )
     args.confidence_by_symbol_date = build_confidence_by_symbol_date(

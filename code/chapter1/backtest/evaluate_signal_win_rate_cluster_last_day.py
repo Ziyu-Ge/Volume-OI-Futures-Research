@@ -6,7 +6,7 @@ import pandas as pd
 import evaluate_signal_win_rate as base
 
 
-DEFAULT_OUTPUT_DIR = base.PROJECT_ROOT / "results" / "evaluation_cluster_last_day"
+DEFAULT_OUTPUT_DIR = base.DEFAULT_RUNS_DIR / "evaluation_cluster_last_day"
 
 
 def add_common_arguments(parser):
@@ -26,12 +26,6 @@ def add_common_arguments(parser):
         "--factor-ids",
         default=base.DEFAULT_FACTOR_IDS,
         help=f"要评估的因子 ID，逗号分隔，默认：{base.DEFAULT_FACTOR_IDS}",
-    )
-    parser.add_argument(
-        "--symbols",
-        "--symbol",
-        dest="symbols",
-        help="只评估指定品种，多个品种用逗号分隔，例如：JD,CU。",
     )
     parser.add_argument(
         "--price-column",
@@ -130,11 +124,9 @@ def parse_args():
 
 def run_evaluation(args):
     runs_dir = args.runs_dir.resolve()
-    symbols = base.parse_csv_list(args.symbols)
     factor_ids = base.parse_factor_ids(args.factor_ids)
     factor_files = base.discover_factor_files(
         runs_dir=runs_dir,
-        symbols=symbols,
         factor_ids=factor_ids,
     )
     args.confidence_by_symbol_date = base.build_confidence_by_symbol_date(

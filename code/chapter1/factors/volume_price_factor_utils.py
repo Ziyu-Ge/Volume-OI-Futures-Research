@@ -3,14 +3,19 @@ import re
 import sys
 
 project_root = os.path.dirname(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    os.path.dirname(
+        os.path.dirname(
+            os.path.dirname(os.path.abspath(__file__))
+        )
+    )
 )
-code_dir = os.path.join(project_root, "code")
+code_dir = os.path.join(project_root, "code", "chapter1")
 
 if code_dir not in sys.path:
     sys.path.insert(0, code_dir)
 
-from config import SYMBOL
+SYMBOL_ENV_VAR = "SYMBOL"
+SYMBOL = os.environ.get(SYMBOL_ENV_VAR, "").strip().upper()
 
 os.environ.setdefault(
     "MPLCONFIGDIR",
@@ -32,6 +37,23 @@ import matplotlib.pyplot as plt
 MAD_SCALE = 1.4826
 MAD_EPSILON = 1e-12
 RESULTS_OUTPUT_ENV_VAR = "RESULTS_OUTPUT_DIR"
+DAILY_DATA_ENV_VAR = "CHAPTER1_DAILY_DIR"
+DEFAULT_RESULTS_DIR = os.path.join(project_root, "results", "chapter1")
+DEFAULT_DAILY_DIR = os.path.join(DEFAULT_RESULTS_DIR, "tables", "daily")
+
+
+def require_symbol(symbol=None):
+    if symbol is None:
+        symbol = SYMBOL
+
+    symbol = str(symbol).strip().upper()
+    if not symbol:
+        raise RuntimeError(
+            f"缺少品种代码。请通过环境变量 {SYMBOL_ENV_VAR} 运行因子脚本，"
+            "或使用 code/chapter1/run/ 下的批量入口。"
+        )
+
+    return symbol
 
 
 def get_results_dir(results_dir=None):
@@ -39,9 +61,17 @@ def get_results_dir(results_dir=None):
         results_dir = os.environ.get(RESULTS_OUTPUT_ENV_VAR)
 
     if results_dir is None:
-        results_dir = os.path.join(project_root, "results")
+        results_dir = DEFAULT_RESULTS_DIR
 
     return os.path.abspath(os.path.expanduser(str(results_dir)))
+
+
+def get_daily_dir():
+    daily_dir = os.environ.get(DAILY_DATA_ENV_VAR)
+    if daily_dir:
+        return os.path.abspath(os.path.expanduser(daily_dir))
+
+    return os.path.abspath(DEFAULT_DAILY_DIR)
 
 
 def parse_factor_script_metadata(file_path):
@@ -54,19 +84,25 @@ def parse_factor_script_metadata(file_path):
 
 
 def load_daily(symbol, results_dir=None):
-    tables_dir = os.path.join(get_results_dir(results_dir), "tables")
+    symbol = require_symbol(symbol)
+    output_tables_dir = os.path.join(get_results_dir(results_dir), "tables")
     daily_filename = f"{symbol}_daily.csv"
     daily_input_candidates = [
-        os.path.join(tables_dir, "daily", daily_filename),
-        os.path.join(tables_dir, daily_filename),
+        os.path.join(get_daily_dir(), daily_filename),
     ]
 
-    default_tables_dir = os.path.join(project_root, "results", "tables")
-    if os.path.abspath(tables_dir) != os.path.abspath(default_tables_dir):
+    output_daily_dir = os.path.join(output_tables_dir, "daily")
+    if os.path.abspath(output_daily_dir) != os.path.abspath(get_daily_dir()):
         daily_input_candidates.extend([
-            os.path.join(default_tables_dir, "daily", daily_filename),
-            os.path.join(default_tables_dir, daily_filename),
+            os.path.join(output_daily_dir, daily_filename),
+            os.path.join(output_tables_dir, daily_filename),
         ])
+
+    legacy_tables_dir = os.path.join(project_root, "results", "tables")
+    daily_input_candidates.extend([
+        os.path.join(legacy_tables_dir, "daily", daily_filename),
+        os.path.join(legacy_tables_dir, daily_filename),
+    ])
 
     daily_input_path = next(
         (
@@ -74,8 +110,14 @@ def load_daily(symbol, results_dir=None):
             for candidate_path in daily_input_candidates
             if os.path.exists(candidate_path)
         ),
-        daily_input_candidates[0],
+        None,
     )
+
+    if daily_input_path is None:
+        raise FileNotFoundError(
+            "未找到日频数据，请先运行 code/chapter1/00_prepare_data.py。"
+            f" 尝试路径：{daily_input_candidates}"
+        )
 
     daily = pd.read_csv(daily_input_path)
 

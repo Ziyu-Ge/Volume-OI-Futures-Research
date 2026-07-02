@@ -5,9 +5,10 @@ import re
 from pathlib import Path
 
 
-CODE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CODE_DIR.parent
-RESULTS_DIR = PROJECT_ROOT / "results"
+PLOT_DIR = Path(__file__).resolve().parent
+CODE_DIR = PLOT_DIR.parent
+PROJECT_ROOT = CODE_DIR.parents[1]
+RESULTS_DIR = PROJECT_ROOT / "results" / "chapter1"
 DEFAULT_RUNS_DIR = RESULTS_DIR
 DEFAULT_OUTPUT_DIR = RESULTS_DIR / "combined"
 DEFAULT_FACTOR_IDS = ("11", "12", "13", "14")
@@ -733,18 +734,6 @@ DASHBOARD_HTML_TEMPLATE = """<!doctype html>
 """
 
 
-def parse_symbols(raw_value):
-    if raw_value is None:
-        return None
-
-    symbols = [
-        item.strip().upper()
-        for item in raw_value.split(",")
-        if item.strip()
-    ]
-    return set(symbols) or None
-
-
 def parse_factor_ids(raw_value):
     if raw_value is None:
         return set(DEFAULT_FACTOR_IDS)
@@ -773,7 +762,7 @@ def parse_factor_file(path):
     }
 
 
-def discover_factor_files(runs_dir, symbol_filter=None, factor_id_filter=None):
+def discover_factor_files(runs_dir, factor_id_filter=None):
     factor_files = []
 
     for run_dir in sorted(runs_dir.iterdir()):
@@ -789,8 +778,6 @@ def discover_factor_files(runs_dir, symbol_filter=None, factor_id_filter=None):
         for path in sorted(factors_dir.glob("*.csv")):
             metadata = parse_factor_file(path)
             if metadata is None:
-                continue
-            if symbol_filter is not None and metadata["symbol"] not in symbol_filter:
                 continue
             if (
                 factor_id_filter is not None and
@@ -1542,12 +1529,6 @@ def main():
         help=f"output directory, default: {DEFAULT_OUTPUT_DIR}",
     )
     parser.add_argument(
-        "--symbols",
-        "--symbol",
-        dest="symbols",
-        help="optional comma-separated symbols, for example: PP,CU",
-    )
-    parser.add_argument(
         "--factor-ids",
         default=",".join(DEFAULT_FACTOR_IDS),
         help=(
@@ -1580,7 +1561,6 @@ def main():
 
     factor_files = discover_factor_files(
         runs_dir=runs_dir,
-        symbol_filter=parse_symbols(args.symbols),
         factor_id_filter=parse_factor_ids(args.factor_ids),
     )
     factor_frames, errors = load_all_factor_data(factor_files)
