@@ -1,36 +1,18 @@
-import os
+import argparse
+from dataclasses import dataclass
 from datetime import time
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from pandas.tseries.offsets import BDay
 
-from config import SYMBOL as CONFIG_SYMBOL
 
-
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-results_dir = os.path.abspath(
-    os.path.expanduser(
-        os.environ.get(
-            "RESULTS_OUTPUT_DIR",
-            os.path.join(project_root, "results"),
-        )
-    )
-)
-
-
-# =========================
-# 参数设置
-# =========================
-
-symbol = os.environ.get("SYMBOL", CONFIG_SYMBOL).upper()
-data_path = os.path.join(project_root, "data", f"{symbol}.csv")
-daily_output_path = os.path.join(
-    results_dir,
-    "tables",
-    "daily",
-    f"{symbol}_daily.csv",
-)
+CHAPTER_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CHAPTER_DIR.parents[1]
+DATA_DIR = PROJECT_ROOT / "data"
+CHAPTER_RESULTS_DIR = PROJECT_ROOT / "results" / "chapter2"
+DEFAULT_DAILY_OUTPUT_DIR = CHAPTER_RESULTS_DIR / "tables" / "daily"
 
 REQUIRED_COLUMNS = {
     "datetime",
@@ -49,13 +31,70 @@ DAY_SESSION_START_TIME = time(8, 0)
 DAY_SESSION_END_TIME = time(16, 0)
 
 
-def validate_columns(frame):
+@dataclass(frozen=True)
+class PrepareResult:
+    symbol: str
+    output_path: Path
+    row_count: int
+    calendar_start: pd.Timestamp
+    calendar_end: pd.Timestamp
+    shifted_row_count: int
+    fallback_evening_count: int
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="将 data/ 下全部品种的分钟数据聚合为 chapter2 日频数据。"
+    )
+    parser.add_argument(
+        "--data-dir",
+        type=Path,
+        default=DATA_DIR,
+        help=f"分钟数据目录，默认：{DATA_DIR}",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=DEFAULT_DAILY_OUTPUT_DIR,
+        help=f"日频数据输出目录，默认：{DEFAULT_DAILY_OUTPUT_DIR}",
+    )
+    parser.add_argument(
+        "--keep-going",
+        action="store_true",
+        help="单个品种失败后继续处理后续品种，并在最后汇总失败列表。",
+    )
+    return parser.parse_args()
+
+
+def discover_data_files(data_dir):
+    if not data_dir.is_dir():
+        raise FileNotFoundError(f"数据目录不存在：{data_dir}")
+
+    data_files = sorted(path for path in data_dir.glob("*.csv") if path.is_file())
+    if not data_files:
+        raise FileNotFoundError(f"数据目录中没有 CSV 文件：{data_dir}")
+
+    return data_files
+
+
+def validate_columns(frame, data_path):
     missing_columns = REQUIRED_COLUMNS - set(frame.columns)
     if missing_columns:
         raise ValueError(
-            "分钟数据缺少必要字段："
-            + ", ".join(sorted(missing_columns))
+            f"{data_path} 缺少字段：{', '.join(sorted(missing_columns))}"
         )
+
+
+def load_minute_data(data_path):
+    frame = pd.read_csv(data_path)
+    validate_columns(frame, data_path)
+
+    frame["datetime"] = pd.to_datetime(frame["datetime"], errors="coerce")
+    invalid_datetime_count = int(frame["datetime"].isna().sum())
+    if invalid_datetime_count:
+        raise ValueError(f"{data_path} datetime 解析失败行数：{invalid_datetime_count}")
+
+    return frame.sort_values("datetime").reset_index(drop=True)
 
 
 def infer_day_session_calendar(frame):
@@ -140,78 +179,128 @@ def map_to_trading_dates(datetimes, trading_dates):
     return mapped_dates, shifted_count, unmatched_evening_count
 
 
-# =========================
-# 1. 读取分钟数据
-# =========================
-
-df = pd.read_csv(data_path)
-validate_columns(df)
-
-df["datetime"] = pd.to_datetime(df["datetime"], errors="coerce")
-invalid_datetime_count = int(df["datetime"].isna().sum())
-if invalid_datetime_count:
-    raise ValueError(f"datetime 解析失败行数：{invalid_datetime_count}")
-
-df = df.sort_values("datetime").reset_index(drop=True)
-
-
-# =========================
-# 2. 按交易日标记分钟数据
-# =========================
-
-trading_calendar = infer_day_session_calendar(df)
-df["date"], shifted_row_count, fallback_evening_count = map_to_trading_dates(
-    df["datetime"],
-    trading_calendar,
-)
-
-
-# =========================
-# 3. 分钟数据聚合成日频数据
-# =========================
-
-daily = (
-    df.groupby("date", sort=True)
-    .agg({
-        "open": "first",
-        "close": "last",
-        "high": "max",
-        "low": "min",
-        "volume": "sum",
-        "total_turnover": "sum",
-        "open_interest": "last",
-    })
-    .reset_index()
-)
-
-
-# =========================
-# 4. 计算投机度
-# =========================
-
-daily.loc[daily["open_interest"] <= 0, "open_interest"] = np.nan
-daily["speculation"] = np.log(daily["volume"] / daily["open_interest"])
-
-
-# =========================
-# 5. 保存结果
-# =========================
-
-os.makedirs(os.path.dirname(daily_output_path), exist_ok=True)
-daily.to_csv(daily_output_path, index=False)
-
-print("日频数据准备完成。")
-print("划分方式：按交易日，而不是自然日。")
-print(f"品种：{symbol}")
-print(f"交易日历起止：{trading_calendar[0].date()} - {trading_calendar[-1].date()}")
-print(f"跨自然日归并行数：{shifted_row_count}")
-if fallback_evening_count:
-    print(
-        "警告：部分尾部夜盘没有可匹配的后续日盘交易日，"
-        f"已用下一工作日兜底，行数：{fallback_evening_count}"
+def aggregate_daily(frame):
+    daily = (
+        frame.groupby("date", sort=True)
+        .agg({
+            "open": "first",
+            "close": "last",
+            "high": "max",
+            "low": "min",
+            "volume": "sum",
+            "total_turnover": "sum",
+            "open_interest": "last",
+        })
+        .reset_index()
     )
-print(f"日频结果保存为：{daily_output_path}")
-print("\n日频数据预览：")
-print(daily.head(20))
-print("\n日频数据行数：")
-print(len(daily))
+
+    daily.loc[daily["open_interest"] <= 0, "open_interest"] = np.nan
+    daily["speculation"] = np.log(daily["volume"] / daily["open_interest"])
+
+    return daily
+
+
+def prepare_daily(data_path):
+    symbol = data_path.stem.upper()
+    minute_data = load_minute_data(data_path)
+    trading_calendar = infer_day_session_calendar(minute_data)
+    (
+        minute_data["date"],
+        shifted_row_count,
+        fallback_evening_count,
+    ) = map_to_trading_dates(minute_data["datetime"], trading_calendar)
+
+    daily = aggregate_daily(minute_data)
+
+    return (
+        symbol,
+        daily,
+        trading_calendar,
+        shifted_row_count,
+        fallback_evening_count,
+    )
+
+
+def save_daily(symbol, daily, output_dir):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{symbol}_daily.csv"
+    daily.to_csv(output_path, index=False)
+    return output_path
+
+
+def prepare_file(data_path, output_dir):
+    (
+        symbol,
+        daily,
+        trading_calendar,
+        shifted_row_count,
+        fallback_evening_count,
+    ) = prepare_daily(data_path)
+    output_path = save_daily(symbol, daily, output_dir)
+
+    return PrepareResult(
+        symbol=symbol,
+        output_path=output_path,
+        row_count=len(daily),
+        calendar_start=trading_calendar[0],
+        calendar_end=trading_calendar[-1],
+        shifted_row_count=shifted_row_count,
+        fallback_evening_count=fallback_evening_count,
+    )
+
+
+def main():
+    args = parse_args()
+    data_dir = args.data_dir.resolve()
+    output_dir = args.output_dir.resolve()
+    data_files = discover_data_files(data_dir)
+    failures = []
+    successes = []
+
+    print(f"分钟数据目录：{data_dir}", flush=True)
+    print(f"chapter2 日频输出目录：{output_dir}", flush=True)
+    print(f"待处理品种数量：{len(data_files)}", flush=True)
+
+    for data_path in data_files:
+        symbol = data_path.stem.upper()
+        try:
+            result = prepare_file(data_path, output_dir)
+            successes.append(result)
+            print(
+                f"[{result.symbol}] 日频数据准备完成："
+                f"{result.row_count} 行 -> {result.output_path}",
+                flush=True,
+            )
+            print(
+                f"[{result.symbol}] 交易日历："
+                f"{result.calendar_start.date()} - "
+                f"{result.calendar_end.date()}，"
+                f"跨自然日归并行数：{result.shifted_row_count}",
+                flush=True,
+            )
+            if result.fallback_evening_count:
+                print(
+                    f"[{result.symbol}] 警告：尾部夜盘兜底行数："
+                    f"{result.fallback_evening_count}",
+                    flush=True,
+                )
+        except Exception as exc:
+            if not args.keep_going:
+                raise
+
+            failures.append((symbol, exc))
+            print(f"[{symbol}] 处理失败：{exc}", flush=True)
+
+    print("\n全部日频数据准备完成。", flush=True)
+    print(f"成功品种数量：{len(successes)}", flush=True)
+    print(f"日频输出目录：{output_dir}", flush=True)
+
+    if failures:
+        print(f"失败品种数量：{len(failures)}", flush=True)
+        for symbol, exc in failures:
+            print(f"- {symbol}: {exc}", flush=True)
+        raise SystemExit(1)
+
+
+if __name__ == "__main__":
+    main()
