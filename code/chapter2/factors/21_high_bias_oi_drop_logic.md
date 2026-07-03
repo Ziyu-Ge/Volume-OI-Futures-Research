@@ -17,11 +17,11 @@
 | `MA_SHORT_WINDOW` | 5 | 短期均线窗口 |
 | `MA_LONG_WINDOW` | 20 | 中期均线窗口 |
 | `MA_TREND_WINDOW` | 60 | 长期均线窗口 |
-| `MA_BIAS_SPREAD_THRESHOLD` | 0.03 | 5 日和 20 日相关乖离差阈值 |
-| `MA_LONG_BIAS_SPREAD_THRESHOLD` | 0.05 | 20 日和 60 日相关乖离差阈值 |
-| `REGRESSION_SLOPE_WINDOW` | 3 | 回归斜率窗口，即最近 3 个交易日 |
+| `MA_BIAS_SPREAD_THRESHOLD` | 0.04 | 5 日和 20 日相关乖离差阈值 |
+| `MA_LONG_BIAS_SPREAD_THRESHOLD` | 0.10 | 20 日和 60 日相关乖离差阈值 |
+| `REGRESSION_SLOPE_WINDOW` | 7 | 回归斜率窗口，即最近 7 个交易日 |
 | `VOLATILITY_WINDOW` | 10 | 波动率窗口 |
-| `TRAILING_VOLATILITY_MULTIPLIER` | 3 | 追踪止损波动倍数 |
+| `TRAILING_VOLATILITY_MULTIPLIER` | 4 | 追踪止损波动倍数 |
 
 ## 开空条件
 
@@ -52,15 +52,15 @@ ma_long_bias_spread_t = close_ma60_bias_t - close_ma20_bias_t
 代码要求：
 
 ```text
-ma_bias_spread_t >= 0.03
-ma_long_bias_spread_t >= 0.05
+ma_bias_spread_t >= 0.04
+ma_long_bias_spread_t >= 0.10
 ```
 
 直观理解：价格相对不同周期均线的偏离差距要达到固定阈值，说明均线结构拉开，处在较高乖离状态。
 
 ### 3. 最近 N 日持仓量回归斜率为负
 
-设 `N = REGRESSION_SLOPE_WINDOW`，当前代码中 `N = 3`。对最近 `N` 个交易日的持仓量做一条回归线：
+设 `N = REGRESSION_SLOPE_WINDOW`，当前代码中 `N = 7`。对最近 `N` 个交易日的持仓量做一条回归线：
 
 ```text
 x = [0, 1, ..., N-1]
@@ -77,7 +77,7 @@ b = sum((x_i - mean(x)) * (y_i - mean(y))) / sum((x_i - mean(x))^2)
 代码要求：
 
 ```text
-oi_regression_slope_3_t < 0
+oi_regression_slope_7_t < 0
 ```
 
 直观理解：最近一段时间持仓量整体方向向下。
@@ -95,7 +95,7 @@ y = a + b * x
 代码要求：
 
 ```text
-close_regression_slope_3_t < 0
+close_regression_slope_7_t < 0
 ```
 
 直观理解：最近一段时间收盘价整体方向向下，短线价格转弱。
@@ -106,10 +106,10 @@ close_regression_slope_3_t < 0
 
 ```text
 open_short_signal_t =
-    ma_bias_spread_t >= 0.03
-and ma_long_bias_spread_t >= 0.05
-and oi_regression_slope_3_t < 0
-and close_regression_slope_3_t < 0
+ma_bias_spread_t >= 0.04
+and ma_long_bias_spread_t >= 0.10
+and oi_regression_slope_7_t < 0
+and close_regression_slope_7_t < 0
 ```
 
 如果第 `t` 日收盘后生成 `open_short_signal_t = 1`，并且当前为空仓，则在第 `t+1` 日开盘执行开空。
@@ -166,7 +166,7 @@ low_since_entry_t = min(开空以来的低点)
 
 ```text
 trailing_stop_distance_t
-    = low_since_entry_t * avg_volatility_rate_10_t * 3
+    = low_since_entry_t * avg_volatility_rate_10_t * 4
 ```
 
 追踪平空价：
@@ -182,7 +182,7 @@ trailing_stop_price_t
 trailing_rebound_signal_t = C_t > trailing_stop_price_t
 ```
 
-直观理解：空单盈利过程中，价格如果从低点向上反弹超过 3 倍近期平均波动，就触发平空，锁定已有收益或控制回撤。
+直观理解：空单盈利过程中，价格如果从低点向上反弹超过 4 倍近期平均波动，就触发平空，锁定已有收益或控制回撤。
 
 ### 3. 平空信号总公式
 
@@ -199,7 +199,7 @@ or trailing_rebound_signal_t
 ```text
 cover_short_signal_t =
     C_t > entry_price
-or C_t > low_since_entry_t * (1 + 3 * avg_volatility_rate_10_t)
+or C_t > low_since_entry_t * (1 + 4 * avg_volatility_rate_10_t)
 ```
 
 如果第 `t` 日收盘后生成 `cover_short_signal_t = 1`，并且当前持有空单，则在第 `t+1` 日开盘执行平空。

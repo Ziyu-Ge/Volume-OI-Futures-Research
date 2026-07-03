@@ -32,11 +32,11 @@ import matplotlib.pyplot as plt
 MA_SHORT_WINDOW = 5
 MA_LONG_WINDOW = 20
 MA_TREND_WINDOW = 60
-MA_BIAS_SPREAD_THRESHOLD = 0.03
-MA_LONG_BIAS_SPREAD_THRESHOLD = 0.05
-REGRESSION_SLOPE_WINDOW = 4
+MA_BIAS_SPREAD_THRESHOLD = 0.04
+MA_LONG_BIAS_SPREAD_THRESHOLD = 0.10
+REGRESSION_SLOPE_WINDOW = 7
 VOLATILITY_WINDOW = 10
-TRAILING_VOLATILITY_MULTIPLIER = 3
+TRAILING_VOLATILITY_MULTIPLIER = 4
 TRADING_DAYS_PER_YEAR = 252
 
 OI_REGRESSION_SLOPE_COLUMN = f"oi_regression_slope_{REGRESSION_SLOPE_WINDOW}"
@@ -68,13 +68,13 @@ CLOSE_REGRESSION_SLOPE_DOWN_COLUMN = (
 # 初始状态为空仓。所有开仓信号在当天收盘后确认，下一交易日开盘执行开空。
 #
 # 开空：
-# 1. ma20 乖离率 - ma5 乖离率 >= 3%，且 ma60 乖离率 - ma20 乖离率 >= 5%；
+# 1. ma20 乖离率 - ma5 乖离率 >= 4%，且 ma60 乖离率 - ma20 乖离率 >= 10%；
 # 2. 最近 REGRESSION_SLOPE_WINDOW 个交易日持仓量做回归线，斜率小于 0；
 # 3. 最近 REGRESSION_SLOPE_WINDOW 个交易日收盘价做回归线，斜率小于 0。
 #
 # 平空：
 # 1. 收盘价高于开仓价；
-# 2. 收盘价高于“开仓以来最低价 + 3 倍历史 10 日平均波动”。
+# 2. 收盘价高于“开仓以来最低价 + 4 倍历史 10 日平均波动”。
 #
 # 两个平空条件任一触发，都会在下一交易日开盘执行平空。历史 10 日平均
 # 波动使用前 10 日 high-low 相对 close 的比例均值，转换成开仓以来最低价

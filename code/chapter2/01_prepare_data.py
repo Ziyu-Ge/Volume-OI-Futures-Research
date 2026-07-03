@@ -13,6 +13,7 @@ PROJECT_ROOT = CHAPTER_DIR.parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 CHAPTER_RESULTS_DIR = PROJECT_ROOT / "results" / "chapter2"
 DEFAULT_DAILY_OUTPUT_DIR = CHAPTER_RESULTS_DIR / "tables" / "daily"
+DEFAULT_HOURLY_OUTPUT_DIR = CHAPTER_RESULTS_DIR / "tables" / "hourly"
 
 REQUIRED_COLUMNS = {
     "datetime",
@@ -44,7 +45,7 @@ class PrepareResult:
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="将 data/ 下全部品种的分钟数据聚合为 chapter2 日频数据。"
+        description="将 data/ 下全部品种的分钟数据聚合为 chapter2 bar 数据。"
     )
     parser.add_argument(
         "--data-dir",
@@ -55,8 +56,17 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=DEFAULT_DAILY_OUTPUT_DIR,
-        help=f"日频数据输出目录，默认：{DEFAULT_DAILY_OUTPUT_DIR}",
+        default=None,
+        help=(
+            "bar 数据输出目录。默认：daily -> "
+            f"{DEFAULT_DAILY_OUTPUT_DIR}；hourly -> {DEFAULT_HOURLY_OUTPUT_DIR}"
+        ),
+    )
+    parser.add_argument(
+        "--frequency",
+        choices=["daily", "hourly"],
+        default="daily",
+        help="输出频率，默认：daily。",
     )
     parser.add_argument(
         "--keep-going",
@@ -195,12 +205,65 @@ def aggregate_daily(frame):
     )
 
     daily.loc[daily["open_interest"] <= 0, "open_interest"] = np.nan
-    daily["speculation"] = np.log(daily["volume"] / daily["open_interest"])
+    add_speculation_column(daily)
 
     return daily
 
 
-def prepare_daily(data_path):
+def aggregate_hourly(frame):
+    hourly_frame = frame.copy()
+    hourly_frame["bar_time"] = hourly_frame["datetime"].dt.floor("h")
+    hourly = (
+        hourly_frame.groupby("bar_time", sort=True)
+        .agg({
+            "open": "first",
+            "close": "last",
+            "high": "max",
+            "low": "min",
+            "volume": "sum",
+            "total_turnover": "sum",
+            "open_interest": "last",
+            "date": "last",
+        })
+        .reset_index()
+        .rename(columns={"bar_time": "date", "date": "trading_date"})
+    )
+
+    hourly.loc[hourly["open_interest"] <= 0, "open_interest"] = np.nan
+    add_speculation_column(hourly)
+
+    output_columns = [
+        "date",
+        "trading_date",
+        "open",
+        "close",
+        "high",
+        "low",
+        "volume",
+        "total_turnover",
+        "open_interest",
+        "speculation",
+    ]
+    return hourly[output_columns]
+
+
+def add_speculation_column(frame):
+    ratio = frame["volume"] / frame["open_interest"]
+    ratio = ratio.replace([np.inf, -np.inf], np.nan)
+    frame["speculation"] = np.nan
+    valid_ratio = ratio > 0
+    frame.loc[valid_ratio, "speculation"] = np.log(ratio.loc[valid_ratio])
+
+
+def aggregate_bars(frame, frequency):
+    if frequency == "daily":
+        return aggregate_daily(frame)
+    if frequency == "hourly":
+        return aggregate_hourly(frame)
+    raise ValueError(f"不支持的输出频率：{frequency}")
+
+
+def prepare_bars(data_path, frequency):
     symbol = data_path.stem.upper()
     minute_data = load_minute_data(data_path)
     trading_calendar = infer_day_session_calendar(minute_data)
@@ -210,38 +273,39 @@ def prepare_daily(data_path):
         fallback_evening_count,
     ) = map_to_trading_dates(minute_data["datetime"], trading_calendar)
 
-    daily = aggregate_daily(minute_data)
+    bars = aggregate_bars(minute_data, frequency)
 
     return (
         symbol,
-        daily,
+        bars,
         trading_calendar,
         shifted_row_count,
         fallback_evening_count,
     )
 
 
-def save_daily(symbol, daily, output_dir):
+def save_bars(symbol, bars, output_dir, frequency):
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{symbol}_daily.csv"
-    daily.to_csv(output_path, index=False)
+    suffix = "daily" if frequency == "daily" else "hourly"
+    output_path = output_dir / f"{symbol}_{suffix}.csv"
+    bars.to_csv(output_path, index=False)
     return output_path
 
 
-def prepare_file(data_path, output_dir):
+def prepare_file(data_path, output_dir, frequency):
     (
         symbol,
-        daily,
+        bars,
         trading_calendar,
         shifted_row_count,
         fallback_evening_count,
-    ) = prepare_daily(data_path)
-    output_path = save_daily(symbol, daily, output_dir)
+    ) = prepare_bars(data_path, frequency)
+    output_path = save_bars(symbol, bars, output_dir, frequency)
 
     return PrepareResult(
         symbol=symbol,
         output_path=output_path,
-        row_count=len(daily),
+        row_count=len(bars),
         calendar_start=trading_calendar[0],
         calendar_end=trading_calendar[-1],
         shifted_row_count=shifted_row_count,
@@ -252,22 +316,31 @@ def prepare_file(data_path, output_dir):
 def main():
     args = parse_args()
     data_dir = args.data_dir.resolve()
-    output_dir = args.output_dir.resolve()
+    if args.output_dir is None:
+        default_output_dir = (
+            DEFAULT_DAILY_OUTPUT_DIR
+            if args.frequency == "daily"
+            else DEFAULT_HOURLY_OUTPUT_DIR
+        )
+        output_dir = default_output_dir.resolve()
+    else:
+        output_dir = args.output_dir.resolve()
     data_files = discover_data_files(data_dir)
     failures = []
     successes = []
 
     print(f"分钟数据目录：{data_dir}", flush=True)
-    print(f"chapter2 日频输出目录：{output_dir}", flush=True)
+    print(f"chapter2 输出频率：{args.frequency}", flush=True)
+    print(f"chapter2 bar 输出目录：{output_dir}", flush=True)
     print(f"待处理品种数量：{len(data_files)}", flush=True)
 
     for data_path in data_files:
         symbol = data_path.stem.upper()
         try:
-            result = prepare_file(data_path, output_dir)
+            result = prepare_file(data_path, output_dir, args.frequency)
             successes.append(result)
             print(
-                f"[{result.symbol}] 日频数据准备完成："
+                f"[{result.symbol}] bar 数据准备完成："
                 f"{result.row_count} 行 -> {result.output_path}",
                 flush=True,
             )
@@ -291,9 +364,9 @@ def main():
             failures.append((symbol, exc))
             print(f"[{symbol}] 处理失败：{exc}", flush=True)
 
-    print("\n全部日频数据准备完成。", flush=True)
+    print("\n全部 bar 数据准备完成。", flush=True)
     print(f"成功品种数量：{len(successes)}", flush=True)
-    print(f"日频输出目录：{output_dir}", flush=True)
+    print(f"bar 输出目录：{output_dir}", flush=True)
 
     if failures:
         print(f"失败品种数量：{len(failures)}", flush=True)
