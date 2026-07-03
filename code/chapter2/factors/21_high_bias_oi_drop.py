@@ -32,31 +32,51 @@ import matplotlib.pyplot as plt
 MA_SHORT_WINDOW = 5
 MA_LONG_WINDOW = 20
 MA_TREND_WINDOW = 60
-MA_BIAS_SPREAD_THRESHOLD = 0.05
+MA_BIAS_SPREAD_THRESHOLD = 0.03
 MA_LONG_BIAS_SPREAD_THRESHOLD = 0.05
-OI_HIGH_WINDOW = 20
-PREV_CLOSE_MEAN_WINDOW = 2
+REGRESSION_SLOPE_WINDOW = 4
 VOLATILITY_WINDOW = 10
 TRAILING_VOLATILITY_MULTIPLIER = 3
 TRADING_DAYS_PER_YEAR = 252
+
+OI_REGRESSION_SLOPE_COLUMN = f"oi_regression_slope_{REGRESSION_SLOPE_WINDOW}"
+OI_REGRESSION_MEAN_COLUMN = f"oi_regression_mean_{REGRESSION_SLOPE_WINDOW}"
+OI_REGRESSION_SLOPE_RATE_COLUMN = (
+    f"oi_regression_slope_rate_{REGRESSION_SLOPE_WINDOW}"
+)
+OI_REGRESSION_SLOPE_DOWN_COLUMN = (
+    f"oi_regression_slope_down_{REGRESSION_SLOPE_WINDOW}"
+)
+CLOSE_REGRESSION_SLOPE_COLUMN = (
+    f"close_regression_slope_{REGRESSION_SLOPE_WINDOW}"
+)
+CLOSE_REGRESSION_MEAN_COLUMN = (
+    f"close_regression_mean_{REGRESSION_SLOPE_WINDOW}"
+)
+CLOSE_REGRESSION_SLOPE_RATE_COLUMN = (
+    f"close_regression_slope_rate_{REGRESSION_SLOPE_WINDOW}"
+)
+CLOSE_REGRESSION_SLOPE_DOWN_COLUMN = (
+    f"close_regression_slope_down_{REGRESSION_SLOPE_WINDOW}"
+)
 
 
 # =========================
 # 策略逻辑说明
 # =========================
 #
-# 初始状态为空仓。所有开仓信号在当天收盘后确认，下一交易日收盘执行开空。
+# 初始状态为空仓。所有开仓信号在当天收盘后确认，下一交易日开盘执行开空。
 #
 # 开空：
-# 1. ma20 乖离率 - ma5 乖离率 >= 2%，且 ma60 乖离率 - ma20 乖离率 >= 5%；
-# 2. 当前持仓量低于此前 20 日最高持仓量，说明持仓从高位回落；
-# 3. 今日收盘价低于前两日收盘价均值。
+# 1. ma20 乖离率 - ma5 乖离率 >= 3%，且 ma60 乖离率 - ma20 乖离率 >= 5%；
+# 2. 最近 REGRESSION_SLOPE_WINDOW 个交易日持仓量做回归线，斜率小于 0；
+# 3. 最近 REGRESSION_SLOPE_WINDOW 个交易日收盘价做回归线，斜率小于 0。
 #
 # 平空：
 # 1. 收盘价高于开仓价；
 # 2. 收盘价高于“开仓以来最低价 + 3 倍历史 10 日平均波动”。
 #
-# 两个平空条件任一触发，都会在下一交易日收盘执行平空。历史 10 日平均
+# 两个平空条件任一触发，都会在下一交易日开盘执行平空。历史 10 日平均
 # 波动使用前 10 日 high-low 相对 close 的比例均值，转换成开仓以来最低价
 # 上的价格距离。
 
@@ -183,6 +203,20 @@ def positive_part(series):
     return series.clip(lower=0).fillna(0)
 
 
+def linear_regression_slope(values):
+    values = np.asarray(values, dtype=float)
+    if np.isnan(values).any():
+        return np.nan
+
+    x = np.arange(len(values), dtype=float)
+    x = x - x.mean()
+    denominator = np.square(x).sum()
+    if denominator == 0:
+        return np.nan
+
+    return np.dot(x, values - values.mean()) / denominator
+
+
 def exit_reason_from_signals(price_above_entry_signal, trailing_rebound_signal):
     if price_above_entry_signal and trailing_rebound_signal:
         return "price_above_entry_and_trailing_rebound"
@@ -194,7 +228,7 @@ def exit_reason_from_signals(price_above_entry_signal, trailing_rebound_signal):
 
 
 def build_short_state_machine(frame):
-    """根据前一日信号执行交易，并输出每日持仓状态。"""
+    """根据前一日信号在当日开盘执行交易，并输出每日持仓状态。"""
     daily = frame.copy()
     daily["actual_open_short_signal"] = (
         daily["open_short_signal"].shift(1).fillna(0).astype(int)
@@ -212,6 +246,7 @@ def build_short_state_machine(frame):
     trade_signals = []
     trade_actions = []
     entry_prices = []
+    exit_prices = []
     exit_reasons = []
     low_since_entry_values = []
     trailing_stop_distances = []
@@ -225,6 +260,7 @@ def build_short_state_machine(frame):
     actual_trailing_rebound_signals = []
 
     for _, row in daily.iterrows():
+        open_price = row["open"]
         close = row["close"]
         low = row["low"]
         avg_volatility_rate = row["avg_volatility_rate_10"]
@@ -243,24 +279,26 @@ def build_short_state_machine(frame):
         trade_signal = 0
         trade_action = ""
         exit_reason = ""
+        row_exit_price = np.nan
         opened_today = False
         row_entry_price = entry_price if position == -1 else np.nan
         row_low_since_entry = low_since_entry if position == -1 else np.nan
 
-        if position == -1 and actual_cover_signal:
+        if position == -1 and actual_cover_signal and pd.notna(open_price):
             trade_signal = 1
             trade_action = "cover_short"
             exit_reason = actual_exit_reason or "cover_short"
             row_entry_price = entry_price
             row_low_since_entry = low_since_entry
+            row_exit_price = open_price
             position = 0
             entry_price = np.nan
             low_since_entry = np.nan
-        elif position == 0 and actual_open_signal and pd.notna(close):
+        elif position == 0 and actual_open_signal and pd.notna(open_price):
             trade_signal = -1
             trade_action = "open_short"
-            entry_price = close
-            low_since_entry = close
+            entry_price = open_price
+            low_since_entry = open_price
             row_entry_price = entry_price
             row_low_since_entry = low_since_entry
             position = -1
@@ -274,9 +312,9 @@ def build_short_state_machine(frame):
         trailing_stop_price = np.nan
 
         if position == -1:
-            low_candidate = close if opened_today else low
+            low_candidate = low
             if pd.isna(low_candidate):
-                low_candidate = close
+                low_candidate = open_price if opened_today else close
             if pd.notna(low_candidate):
                 low_since_entry = min(low_since_entry, low_candidate)
 
@@ -317,6 +355,7 @@ def build_short_state_machine(frame):
         trade_signals.append(trade_signal)
         trade_actions.append(trade_action)
         entry_prices.append(row_entry_price)
+        exit_prices.append(row_exit_price)
         exit_reasons.append(exit_reason)
         low_since_entry_values.append(row_low_since_entry)
         trailing_stop_distances.append(trailing_stop_distance)
@@ -334,6 +373,7 @@ def build_short_state_machine(frame):
     daily["trade_signal"] = trade_signals
     daily["trade_action"] = trade_actions
     daily["entry_price"] = entry_prices
+    daily["exit_price"] = exit_prices
     daily["exit_reason"] = exit_reasons
     daily["low_since_entry"] = low_since_entry_values
     daily["trailing_stop_distance"] = trailing_stop_distances
@@ -460,7 +500,7 @@ def build_plot_trade_table(daily):
         if row["trade_signal"] == -1 and open_trade is None:
             entry_price = row.get("entry_price", np.nan)
             if pd.isna(entry_price):
-                entry_price = row["close"]
+                entry_price = row["open"]
             open_trade = {
                 "entry_date": row["date"],
                 "entry_price": entry_price,
@@ -468,13 +508,16 @@ def build_plot_trade_table(daily):
             continue
 
         if row["trade_signal"] == 1 and open_trade is not None:
+            exit_price = row.get("exit_price", np.nan)
+            if pd.isna(exit_price):
+                exit_price = row["open"]
             trades.append(
                 {
                     "status": "closed",
                     "entry_date": open_trade["entry_date"],
                     "exit_date": row["date"],
                     "entry_price": open_trade["entry_price"],
-                    "exit_price": row["close"],
+                    "exit_price": exit_price,
                 }
             )
             open_trade = None
@@ -707,34 +750,61 @@ def calculate_symbol(symbol, daily_dir, output_dir):
         daily["ma_long_bias_spread"] >= MA_LONG_BIAS_SPREAD_THRESHOLD
     ).astype(int)
 
-    daily["oi_20d_high"] = (
+    daily[OI_REGRESSION_SLOPE_COLUMN] = (
         daily["open_interest"]
-        .shift(1)
-        .rolling(window=OI_HIGH_WINDOW, min_periods=OI_HIGH_WINDOW)
-        .max()
-    )
-    daily["oi_drawdown_from_20d_high"] = (
-        daily["open_interest"] / daily["oi_20d_high"] - 1
-    )
-    daily["oi_dropped_from_20d_high"] = (
-        daily["open_interest"] < daily["oi_20d_high"]
-    ).astype(int)
-
-    daily["prev_2_close_mean"] = (
-        daily["close"]
-        .shift(1)
         .rolling(
-            window=PREV_CLOSE_MEAN_WINDOW,
-            min_periods=PREV_CLOSE_MEAN_WINDOW,
+            window=REGRESSION_SLOPE_WINDOW,
+            min_periods=REGRESSION_SLOPE_WINDOW,
+        )
+        .apply(linear_regression_slope, raw=True)
+    )
+    daily[OI_REGRESSION_MEAN_COLUMN] = (
+        daily["open_interest"]
+        .rolling(
+            window=REGRESSION_SLOPE_WINDOW,
+            min_periods=REGRESSION_SLOPE_WINDOW,
         )
         .mean()
     )
-    daily["close_vs_prev2_mean"] = daily["close"] / daily["prev_2_close_mean"] - 1
-    daily["price_below_prev2_mean"] = (
-        daily["close"] < daily["prev_2_close_mean"]
+    daily[OI_REGRESSION_SLOPE_RATE_COLUMN] = (
+        daily[OI_REGRESSION_SLOPE_COLUMN]
+        / daily[OI_REGRESSION_MEAN_COLUMN].replace(0, np.nan)
+    )
+    daily[OI_REGRESSION_SLOPE_DOWN_COLUMN] = (
+        daily[OI_REGRESSION_SLOPE_COLUMN] < 0
+    ).astype(int)
+
+    daily[CLOSE_REGRESSION_SLOPE_COLUMN] = (
+        daily["close"]
+        .rolling(
+            window=REGRESSION_SLOPE_WINDOW,
+            min_periods=REGRESSION_SLOPE_WINDOW,
+        )
+        .apply(linear_regression_slope, raw=True)
+    )
+    daily[CLOSE_REGRESSION_MEAN_COLUMN] = (
+        daily["close"]
+        .rolling(
+            window=REGRESSION_SLOPE_WINDOW,
+            min_periods=REGRESSION_SLOPE_WINDOW,
+        )
+        .mean()
+    )
+    daily[CLOSE_REGRESSION_SLOPE_RATE_COLUMN] = (
+        daily[CLOSE_REGRESSION_SLOPE_COLUMN]
+        / daily[CLOSE_REGRESSION_MEAN_COLUMN].replace(0, np.nan)
+    )
+    daily[CLOSE_REGRESSION_SLOPE_DOWN_COLUMN] = (
+        daily[CLOSE_REGRESSION_SLOPE_COLUMN] < 0
     ).astype(int)
 
     daily["daily_return"] = daily["close"].pct_change()
+    daily["overnight_return"] = (
+        daily["open"] / daily["close"].shift(1).replace(0, np.nan) - 1
+    )
+    daily["intraday_return"] = (
+        daily["close"] / daily["open"].replace(0, np.nan) - 1
+    )
     daily["price_range"] = daily["high"] - daily["low"]
     daily["price_range_rate"] = daily["price_range"] / daily["close"].replace(
         0,
@@ -756,21 +826,23 @@ def calculate_symbol(symbol, daily_dir, output_dir):
     daily["open_short_signal"] = (
         (daily["ma_bias_spread_signal"] == 1)
         & (daily["ma_long_bias_spread_signal"] == 1)
-        & (daily["oi_dropped_from_20d_high"] == 1)
-        & (daily["price_below_prev2_mean"] == 1)
+        & (daily[OI_REGRESSION_SLOPE_DOWN_COLUMN] == 1)
+        & (daily[CLOSE_REGRESSION_SLOPE_DOWN_COLUMN] == 1)
     ).astype(int)
 
     daily["high_bias_oi_drop_score"] = (
         positive_part(daily["bias_5_20"])
         + positive_part(daily["ma_bias_spread"])
         + positive_part(daily["ma_long_bias_spread"])
-        + positive_part(-daily["oi_drawdown_from_20d_high"])
-        + positive_part(-daily["close_vs_prev2_mean"])
+        + positive_part(-daily[OI_REGRESSION_SLOPE_RATE_COLUMN])
+        + positive_part(-daily[CLOSE_REGRESSION_SLOPE_RATE_COLUMN])
     )
 
     daily = build_short_state_machine(daily)
     daily["strategy_daily_return"] = (
-        daily["position"].shift(1).fillna(0) * daily["daily_return"].fillna(0)
+        daily["position"].shift(1).fillna(0)
+        * daily["overnight_return"].fillna(0)
+        + daily["position"].fillna(0) * daily["intraday_return"].fillna(0)
     )
     daily["strategy_cumulative_return"] = (
         (1 + daily["strategy_daily_return"]).cumprod() - 1
@@ -778,6 +850,8 @@ def calculate_symbol(symbol, daily_dir, output_dir):
 
     feature_columns = [
         "daily_return",
+        "overnight_return",
+        "intraday_return",
         "ma5",
         "ma20",
         "ma60",
@@ -794,12 +868,14 @@ def calculate_symbol(symbol, daily_dir, output_dir):
         "ma_bias_spread_signal",
         "ma_long_bias_spread",
         "ma_long_bias_spread_signal",
-        "oi_20d_high",
-        "oi_drawdown_from_20d_high",
-        "oi_dropped_from_20d_high",
-        "prev_2_close_mean",
-        "close_vs_prev2_mean",
-        "price_below_prev2_mean",
+        OI_REGRESSION_SLOPE_COLUMN,
+        OI_REGRESSION_MEAN_COLUMN,
+        OI_REGRESSION_SLOPE_RATE_COLUMN,
+        OI_REGRESSION_SLOPE_DOWN_COLUMN,
+        CLOSE_REGRESSION_SLOPE_COLUMN,
+        CLOSE_REGRESSION_MEAN_COLUMN,
+        CLOSE_REGRESSION_SLOPE_RATE_COLUMN,
+        CLOSE_REGRESSION_SLOPE_DOWN_COLUMN,
         "price_range",
         "price_range_rate",
         "avg_price_range_10",
@@ -817,6 +893,7 @@ def calculate_symbol(symbol, daily_dir, output_dir):
         "trade_signal",
         "trade_action",
         "entry_price",
+        "exit_price",
         "low_since_entry",
         "trailing_stop_distance",
         "trailing_stop_price",
@@ -845,8 +922,7 @@ def calculate_symbol(symbol, daily_dir, output_dir):
     summary_table["ma_long_bias_spread_threshold"] = (
         MA_LONG_BIAS_SPREAD_THRESHOLD
     )
-    summary_table["oi_high_window"] = OI_HIGH_WINDOW
-    summary_table["prev_close_mean_window"] = PREV_CLOSE_MEAN_WINDOW
+    summary_table["regression_slope_window"] = REGRESSION_SLOPE_WINDOW
     summary_table["volatility_window"] = VOLATILITY_WINDOW
     summary_table["trailing_volatility_multiplier"] = (
         TRAILING_VOLATILITY_MULTIPLIER

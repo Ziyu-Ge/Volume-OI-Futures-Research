@@ -119,7 +119,7 @@ def discover_factor_files(factor_output_dir, symbols=None):
 
 def load_factor_daily(file_info):
     daily = pd.read_csv(file_info["path"])
-    required_columns = {"date", "close", "position"}
+    required_columns = {"date", "open", "close", "position"}
     missing_columns = required_columns - set(daily.columns)
     if missing_columns:
         raise ValueError(
@@ -130,6 +130,7 @@ def load_factor_daily(file_info):
     daily["date"] = pd.to_datetime(daily["date"])
     daily = daily.sort_values("date").reset_index(drop=True)
     daily["symbol"] = file_info["symbol"]
+    daily["open"] = pd.to_numeric(daily["open"], errors="coerce")
     daily["close"] = pd.to_numeric(daily["close"], errors="coerce")
     daily["position"] = (
         pd.to_numeric(daily["position"], errors="coerce")
@@ -145,15 +146,44 @@ def load_factor_daily(file_info):
     else:
         daily["daily_return"] = daily["close"].pct_change()
 
+    if "overnight_return" in daily.columns:
+        daily["overnight_return"] = pd.to_numeric(
+            daily["overnight_return"],
+            errors="coerce",
+        )
+    else:
+        daily["overnight_return"] = (
+            daily["open"] / daily["close"].shift(1).replace(0, np.nan) - 1
+        )
+
+    if "intraday_return" in daily.columns:
+        daily["intraday_return"] = pd.to_numeric(
+            daily["intraday_return"],
+            errors="coerce",
+        )
+    else:
+        daily["intraday_return"] = (
+            daily["close"] / daily["open"].replace(0, np.nan) - 1
+        )
+
     daily["benchmark_position"] = 1
     daily["benchmark_daily_return"] = daily["daily_return"].fillna(0)
     add_simple_curve_columns(daily, "benchmark_daily_return", "benchmark")
 
-    daily["effective_position"] = daily["position"].shift(1).fillna(0).astype(int)
+    daily["previous_close_position"] = (
+        daily["position"].shift(1).fillna(0).astype(int)
+    )
+    daily["effective_position"] = daily["position"]
     daily["reverse_short_position"] = daily["effective_position"]
     daily["strategy_net_position"] = 1 + 2 * daily["reverse_short_position"]
     daily["short_overlay_daily_return"] = (
-        2 * daily["reverse_short_position"] * daily["benchmark_daily_return"]
+        2
+        * (
+            daily["previous_close_position"]
+            * daily["overnight_return"].fillna(0)
+            + daily["reverse_short_position"]
+            * daily["intraday_return"].fillna(0)
+        )
     )
     add_simple_curve_columns(
         daily,
@@ -400,15 +430,20 @@ def build_trade_table(daily, symbol):
 
 
 def build_trade_row(daily, symbol, open_index, open_row, exit_index, exit_row, status):
-    return_slice = daily.iloc[open_index + 1:exit_index + 1]
+    return_slice = daily.iloc[open_index:exit_index + 1]
     trade_strategy_return = return_slice["simple_daily_return"].sum()
     trade_benchmark_return = return_slice["benchmark_daily_return"].sum()
     trade_short_overlay_return = return_slice["short_overlay_daily_return"].sum()
     trade_excess_return = return_slice["excess_daily_return"].sum()
     entry_price = open_row.get("entry_price", np.nan)
     if pd.isna(entry_price):
-        entry_price = open_row["close"]
-    exit_price = exit_row["close"]
+        entry_price = open_row["open"]
+    if status == "open":
+        exit_price = exit_row["close"]
+    else:
+        exit_price = exit_row.get("exit_price", np.nan)
+        if pd.isna(exit_price):
+            exit_price = exit_row["open"]
     trade_price_return = np.nan
     if pd.notna(entry_price) and entry_price != 0 and pd.notna(exit_price):
         trade_price_return = entry_price / exit_price - 1
@@ -548,7 +583,7 @@ def plot_return_summary(summaries, figure_path):
             f"{','.join(sorted(missing_columns))}"
         )
 
-    plot_data = plot_data.sort_values("strategy_total_return", ascending=True)
+    plot_data = plot_data.sort_values("excess_total_return", ascending=True)
     labels = plot_data["symbol"].replace(
         {"ALL_SYMBOLS_EQUAL_WEIGHT": "ALL_EQUAL_WEIGHT"}
     )

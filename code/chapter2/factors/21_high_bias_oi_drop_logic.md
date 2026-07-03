@@ -6,9 +6,9 @@
 
 这个策略寻找的是：
 
-价格均线仍处在较强的多头排列和高乖离状态，但持仓量已经从高位回落，同时收盘价短期走弱。满足这些条件后，策略在下一交易日收盘开空。
+价格均线仍处在较强的多头排列和高乖离状态，但最近一段时间持仓量和收盘价都在走弱。满足这些条件后，策略在下一交易日开盘开空。
 
-持有空单后，如果价格涨回开仓价上方，或者从开仓以来低点明显反弹，就在下一交易日收盘平空。
+持有空单后，如果价格涨回开仓价上方，或者从开仓以来低点明显反弹，就在下一交易日开盘平空。
 
 ## 关键参数
 
@@ -17,10 +17,9 @@
 | `MA_SHORT_WINDOW` | 5 | 短期均线窗口 |
 | `MA_LONG_WINDOW` | 20 | 中期均线窗口 |
 | `MA_TREND_WINDOW` | 60 | 长期均线窗口 |
-| `MA_BIAS_SPREAD_THRESHOLD` | 0.05 | 5 日和 20 日相关乖离差阈值 |
+| `MA_BIAS_SPREAD_THRESHOLD` | 0.03 | 5 日和 20 日相关乖离差阈值 |
 | `MA_LONG_BIAS_SPREAD_THRESHOLD` | 0.05 | 20 日和 60 日相关乖离差阈值 |
-| `OI_HIGH_WINDOW` | 20 | 持仓量高点回看窗口 |
-| `PREV_CLOSE_MEAN_WINDOW` | 2 | 前 2 日收盘均值窗口 |
+| `REGRESSION_SLOPE_WINDOW` | 3 | 回归斜率窗口，即最近 3 个交易日 |
 | `VOLATILITY_WINDOW` | 10 | 波动率窗口 |
 | `TRAILING_VOLATILITY_MULTIPLIER` | 3 | 追踪止损波动倍数 |
 
@@ -29,6 +28,7 @@
 设第 `t` 日：
 
 - `C_t`：当日收盘价
+- `O_t`：当日开盘价
 - `OI_t`：当日持仓量
 - `MA5_t`：5 日收盘均线
 - `MA20_t`：20 日收盘均线
@@ -52,62 +52,72 @@ ma_long_bias_spread_t = close_ma60_bias_t - close_ma20_bias_t
 代码要求：
 
 ```text
-ma_bias_spread_t >= 0.05
+ma_bias_spread_t >= 0.03
 ma_long_bias_spread_t >= 0.05
 ```
 
-直观理解：价格相对不同周期均线的偏离差距足够大，说明短、中、长期均线结构拉开，处在较高乖离状态。
+直观理解：价格相对不同周期均线的偏离差距要达到固定阈值，说明均线结构拉开，处在较高乖离状态。
 
-### 3. 持仓量从 20 日高位回落
+### 3. 最近 N 日持仓量回归斜率为负
 
-代码先取前 20 个交易日的持仓量最高值，不包含今天：
-
-```text
-oi_20d_high_t = max(OI_{t-20}, OI_{t-19}, ..., OI_{t-1})
-```
-
-然后判断今天持仓量是否低于这个高点：
+设 `N = REGRESSION_SLOPE_WINDOW`，当前代码中 `N = 3`。对最近 `N` 个交易日的持仓量做一条回归线：
 
 ```text
-OI_t < oi_20d_high_t
+x = [0, 1, ..., N-1]
+y = [OI_{t-N+1}, ..., OI_{t-1}, OI_t]
+y = a + b * x
 ```
 
-直观理解：持仓量不再创新高，而是已经从近期高位回落。
-
-### 4. 收盘价短期走弱
-
-先计算前 2 日收盘均值，不包含今天：
+斜率 `b` 的计算公式：
 
 ```text
-prev_2_close_mean_t = (C_{t-1} + C_{t-2}) / 2
+b = sum((x_i - mean(x)) * (y_i - mean(y))) / sum((x_i - mean(x))^2)
 ```
 
-然后判断：
+代码要求：
 
 ```text
-C_t < prev_2_close_mean_t
+oi_regression_slope_3_t < 0
 ```
 
-直观理解：今天收盘价低于前两天的平均收盘价，短线价格已经转弱。
+直观理解：最近一段时间持仓量整体方向向下。
+
+### 4. 最近 N 日收盘价回归斜率为负
+
+同样对最近 `N` 个交易日的收盘价做一条回归线：
+
+```text
+x = [0, 1, ..., N-1]
+y = [C_{t-N+1}, ..., C_{t-1}, C_t]
+y = a + b * x
+```
+
+代码要求：
+
+```text
+close_regression_slope_3_t < 0
+```
+
+直观理解：最近一段时间收盘价整体方向向下，短线价格转弱。
 
 ### 5. 开空信号总公式
 
-四个条件必须同时满足：
+以下条件必须同时满足：
 
 ```text
 open_short_signal_t =
-    ma_bias_spread_t >= 0.05
+    ma_bias_spread_t >= 0.03
 and ma_long_bias_spread_t >= 0.05
-and OI_t < oi_20d_high_t
-and C_t < prev_2_close_mean_t
+and oi_regression_slope_3_t < 0
+and close_regression_slope_3_t < 0
 ```
 
-如果第 `t` 日收盘后生成 `open_short_signal_t = 1`，并且当前为空仓，则在第 `t+1` 日收盘执行开空。
+如果第 `t` 日收盘后生成 `open_short_signal_t = 1`，并且当前为空仓，则在第 `t+1` 日开盘执行开空。
 
 执行开空时：
 
 ```text
-entry_price = C_{t+1}
+entry_price = O_{t+1}
 position = -1
 ```
 
@@ -115,7 +125,7 @@ position = -1
 
 ## 平空条件
 
-持有空单后，每天收盘后检查是否需要平空。平空信号同样不是当天立刻执行，而是在下一交易日收盘执行。
+持有空单后，每天收盘后检查是否需要平空。平空信号同样不是当天立刻执行，而是在下一交易日开盘执行。
 
 设：
 
@@ -192,11 +202,12 @@ cover_short_signal_t =
 or C_t > low_since_entry_t * (1 + 3 * avg_volatility_rate_10_t)
 ```
 
-如果第 `t` 日收盘后生成 `cover_short_signal_t = 1`，并且当前持有空单，则在第 `t+1` 日收盘执行平空。
+如果第 `t` 日收盘后生成 `cover_short_signal_t = 1`，并且当前持有空单，则在第 `t+1` 日开盘执行平空。
 
 执行平空时：
 
 ```text
+exit_price = O_{t+1}
 position = 0
 ```
 
@@ -204,7 +215,7 @@ position = 0
 
 ## 信号和实际交易的时间关系
 
-代码采用“当天收盘后确认信号，下一交易日收盘执行”的方式：
+代码采用“当天收盘后确认信号，下一交易日开盘执行”的方式：
 
 ```text
 actual_open_short_signal_t = open_short_signal_{t-1}
@@ -213,8 +224,8 @@ actual_cover_short_signal_t = cover_short_signal_{t-1}
 
 因此：
 
-- 第 `t` 日出现开空信号，实际第 `t+1` 日收盘开空。
-- 第 `t` 日出现平空信号，实际第 `t+1` 日收盘平空。
+- 第 `t` 日出现开空信号，实际第 `t+1` 日开盘开空。
+- 第 `t` 日出现平空信号，实际第 `t+1` 日开盘平空。
 - 初始状态为空仓。
 - 只有空仓时才会开空。
 - 持有空单时，如果触发平空，平空优先执行。

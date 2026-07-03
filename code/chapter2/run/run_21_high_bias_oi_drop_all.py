@@ -11,7 +11,15 @@ PROJECT_ROOT = CHAPTER_DIR.parents[1]
 CHAPTER_RESULTS_DIR = PROJECT_ROOT / "results" / "chapter2"
 DAILY_DIR = CHAPTER_RESULTS_DIR / "tables" / "daily"
 FACTOR_OUTPUT_DIR = CHAPTER_RESULTS_DIR / "21_high_bias_oi_drop_all_symbols"
+BACKTEST_OUTPUT_DIR = (
+    CHAPTER_RESULTS_DIR
+    / "backtest"
+    / "21_high_bias_oi_drop_simple_interest"
+)
 FACTOR_SCRIPT = CHAPTER_DIR / "factors" / "21_high_bias_oi_drop.py"
+BACKTEST_SCRIPT = (
+    CHAPTER_DIR / "backtest" / "backtest_21_high_bias_oi_drop_simple.py"
+)
 
 
 def build_parser():
@@ -29,6 +37,12 @@ def build_parser():
         type=Path,
         default=FACTOR_OUTPUT_DIR,
         help=f"因子结果目录，默认：{FACTOR_OUTPUT_DIR}",
+    )
+    parser.add_argument(
+        "--backtest-output-dir",
+        type=Path,
+        default=BACKTEST_OUTPUT_DIR,
+        help=f"回测结果目录，默认：{BACKTEST_OUTPUT_DIR}",
     )
     parser.add_argument(
         "--collect-only",
@@ -71,10 +85,12 @@ def main():
 
     daily_dir = args.daily_dir.resolve()
     output_dir = args.output_dir.resolve()
+    backtest_output_dir = args.backtest_output_dir.resolve()
     env = build_env(output_dir, daily_dir)
 
     print(f"chapter2 日频目录：{daily_dir}", flush=True)
     print(f"chapter2 因子结果目录：{output_dir}", flush=True)
+    print(f"chapter2 回测结果目录：{backtest_output_dir}", flush=True)
 
     factor_command = [
         sys.executable,
@@ -89,6 +105,18 @@ def main():
     if args.keep_going:
         factor_command.append("--keep-going")
     run_command(factor_command, env)
+
+    backtest_command = [
+        sys.executable,
+        BACKTEST_SCRIPT,
+        "--factor-output-dir",
+        output_dir,
+        "--output-dir",
+        backtest_output_dir,
+    ]
+    if args.keep_going:
+        backtest_command.append("--keep-going")
+    run_command(backtest_command, env)
 
 
 if __name__ == "__main__":
