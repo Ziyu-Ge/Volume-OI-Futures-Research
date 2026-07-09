@@ -232,16 +232,16 @@ actual_cover_short_signal_t = cover_short_signal_{t-1}
 
 ## 结果
 
-![结果1](useful_plots/all_symbols_21_high_bias_oi_drop_simple_return_summary.png)
+![结果1](../../../useful_plots/all_symbols_21_high_bias_oi_drop_simple_return_summary.png)
 
-![结果2](useful_plots/SA_21_high_bias_oi_drop_signal_on_price.png)
+![结果2](../../../useful_plots/SA_21_high_bias_oi_drop_signal_on_price.png)
 
-![结果3](useful_plots/SF_21_high_bias_oi_drop_signal_on_price.png)
+![结果3](../../../useful_plots/SF_21_high_bias_oi_drop_signal_on_price.png)
 
-![结果4](useful_plots/SI_21_high_bias_oi_drop_signal_on_price.png)
+![结果4](../../../useful_plots/SI_21_high_bias_oi_drop_signal_on_price.png)
 
-![结果5](useful_plots/PG_21_high_bias_oi_drop_signal_on_price.png)
+![结果5](../../../useful_plots/PG_21_high_bias_oi_drop_signal_on_price.png)
 
-![结果6](useful_plots/V_21_high_bias_oi_drop_signal_on_price.png)
+![结果6](../../../useful_plots/V_21_high_bias_oi_drop_signal_on_price.png)
 
-![结果7](useful_plots/EG_21_high_bias_oi_drop_signal_on_price.png)
+![结果7](../../../useful_plots/EG_21_high_bias_oi_drop_signal_on_price.png)
