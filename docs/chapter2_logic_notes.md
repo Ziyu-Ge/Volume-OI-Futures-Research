@@ -323,18 +323,6 @@ or C_t > low_since_entry_t * (1 + 4 * avg_volatility_rate_10_t)
 
 ![21 号因子等权净值](../useful_plots/all_symbols_21_high_bias_oi_drop_simple_equal_weight_equity.png)
 
-![SA 21 号因子价格信号](../useful_plots/SA_21_high_bias_oi_drop_signal_on_price.png)
-
-![SF 21 号因子价格信号](../useful_plots/SF_21_high_bias_oi_drop_signal_on_price.png)
-
-![SI 21 号因子价格信号](../useful_plots/SI_21_high_bias_oi_drop_signal_on_price.png)
-
-![PG 21 号因子价格信号](../useful_plots/PG_21_high_bias_oi_drop_signal_on_price.png)
-
-![V 21 号因子价格信号](../useful_plots/V_21_high_bias_oi_drop_signal_on_price.png)
-
-![EG 21 号因子价格信号](../useful_plots/EG_21_high_bias_oi_drop_signal_on_price.png)
-
 ### 22_high_bias_oi_drop_hourly
 
 ![22 号因子收益汇总](../useful_plots/all_symbols_22_high_bias_oi_drop_hourly_simple_return_summary.png)
