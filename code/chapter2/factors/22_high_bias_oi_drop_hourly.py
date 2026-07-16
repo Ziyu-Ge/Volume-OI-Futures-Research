@@ -29,56 +29,21 @@ import matplotlib.pyplot as plt
 # 参数设置
 # =========================
 
-MA_SHORT_WINDOW = 40
-MA_LONG_WINDOW = 240
-MA_TREND_WINDOW = 600
-MA_BIAS_SPREAD_THRESHOLD = 0.01
-MA_LONG_BIAS_SPREAD_THRESHOLD = 0.16
-REGRESSION_SLOPE_WINDOW = 70
-VOLATILITY_WINDOW = 90
-TRAILING_VOLATILITY_MULTIPLIER = 5
-HOURLY_BARS_PER_YEAR = 252 * 6
-BAR_FREQUENCY = "hourly"
-WINDOW_UNIT = "hourly_bar"
+MA_SHORT_WINDOW = 5
+MA_LONG_WINDOW = 20
+MA_TREND_WINDOW = 60
+MA_BIAS_SPREAD_THRESHOLD = 0.04
+MA_LONG_BIAS_SPREAD_THRESHOLD = 0.10
+OI_REGRESSION_SLOPE_WINDOW = 15
+CLOSE_REGRESSION_SLOPE_WINDOW = 7
+VOLATILITY_WINDOW = 10
+TRAILING_VOLATILITY_MULTIPLIER = 4
 
-# 本脚本读取 *_hourly.csv；所有滚动窗口单位都是“小时 bar 数”。
-# 例如 ma40 表示最近 40 根小时 bar 的收盘均线，不是 40 个交易日均线。
-# 遇到夜盘、午休或节假日等无交易时段时，不额外补空 bar。
-
-MA_SHORT_COLUMN = f"ma{MA_SHORT_WINDOW}"
-MA_LONG_COLUMN = f"ma{MA_LONG_WINDOW}"
-MA_TREND_COLUMN = f"ma{MA_TREND_WINDOW}"
-MA_SHORT_LONG_RATIO_COLUMN = f"{MA_SHORT_COLUMN}_{MA_LONG_COLUMN}_ratio"
-BIAS_SHORT_LONG_COLUMN = f"bias_{MA_SHORT_WINDOW}_{MA_LONG_WINDOW}"
-BIAS_SHORT_GT_LONG_COLUMN = f"bias_{MA_SHORT_COLUMN}_gt_{MA_LONG_COLUMN}"
-MA_LONG_TREND_RATIO_COLUMN = f"{MA_LONG_COLUMN}_{MA_TREND_COLUMN}_ratio"
-BIAS_LONG_TREND_COLUMN = f"bias_{MA_LONG_WINDOW}_{MA_TREND_WINDOW}"
-BIAS_LONG_GT_TREND_COLUMN = f"bias_{MA_LONG_COLUMN}_gt_{MA_TREND_COLUMN}"
-CLOSE_MA_SHORT_BIAS_COLUMN = f"close_{MA_SHORT_COLUMN}_bias"
-CLOSE_MA_LONG_BIAS_COLUMN = f"close_{MA_LONG_COLUMN}_bias"
-CLOSE_MA_TREND_BIAS_COLUMN = f"close_{MA_TREND_COLUMN}_bias"
-AVG_PRICE_RANGE_COLUMN = f"avg_price_range_{VOLATILITY_WINDOW}"
-AVG_VOLATILITY_RATE_COLUMN = f"avg_volatility_rate_{VOLATILITY_WINDOW}"
-
-OI_REGRESSION_SLOPE_COLUMN = f"oi_regression_slope_{REGRESSION_SLOPE_WINDOW}"
-OI_REGRESSION_MEAN_COLUMN = f"oi_regression_mean_{REGRESSION_SLOPE_WINDOW}"
-OI_REGRESSION_SLOPE_RATE_COLUMN = (
-    f"oi_regression_slope_rate_{REGRESSION_SLOPE_WINDOW}"
-)
 OI_REGRESSION_SLOPE_DOWN_COLUMN = (
-    f"oi_regression_slope_down_{REGRESSION_SLOPE_WINDOW}"
-)
-CLOSE_REGRESSION_SLOPE_COLUMN = (
-    f"close_regression_slope_{REGRESSION_SLOPE_WINDOW}"
-)
-CLOSE_REGRESSION_MEAN_COLUMN = (
-    f"close_regression_mean_{REGRESSION_SLOPE_WINDOW}"
-)
-CLOSE_REGRESSION_SLOPE_RATE_COLUMN = (
-    f"close_regression_slope_rate_{REGRESSION_SLOPE_WINDOW}"
+    f"oi_regression_slope_down_{OI_REGRESSION_SLOPE_WINDOW}"
 )
 CLOSE_REGRESSION_SLOPE_DOWN_COLUMN = (
-    f"close_regression_slope_down_{REGRESSION_SLOPE_WINDOW}"
+    f"close_regression_slope_down_{CLOSE_REGRESSION_SLOPE_WINDOW}"
 )
 
 
@@ -86,20 +51,22 @@ CLOSE_REGRESSION_SLOPE_DOWN_COLUMN = (
 # 策略逻辑说明
 # =========================
 #
-# 初始状态为空仓。所有开仓信号在当前小时 bar 收盘后确认，下一小时 bar 开盘执行开空。
+# 读取小时数据，但滚动窗口仍按交易日计算。每个小时把当日已发生的小时
+# bar 累计成一根“截至当前小时”的日 K；当日以前只使用完整交易日。
+#
+# 初始状态为空仓。每个小时收盘后确认一次信号，下一小时 bar 开盘执行。
 #
 # 开空：
-# 1. ma40/ma240/ma600 分别是最近 40/240/600 根小时 bar 的收盘均线；
-# 2. ma240 乖离率 - ma40 乖离率 >= 1%，且 ma600 乖离率 - ma240 乖离率 >= 16%；
-# 3. 最近 REGRESSION_SLOPE_WINDOW 根小时 bar 持仓量做回归线，斜率小于 0；
-# 4. 最近 REGRESSION_SLOPE_WINDOW 根小时 bar 收盘价做回归线，斜率小于 0。
+# 1. ma20 乖离率 - ma5 乖离率 >= 4%，且 ma60 乖离率 - ma20 乖离率 >= 10%；
+# 2. 最近 OI_REGRESSION_SLOPE_WINDOW 个交易日持仓量做回归线，斜率小于 0；
+# 3. 最近 CLOSE_REGRESSION_SLOPE_WINDOW 个交易日收盘价做回归线，斜率小于 0。
 #
 # 平空：
 # 1. 收盘价高于开仓价；
-# 2. 收盘价高于“开仓以来最低价 + 5 倍历史 90 个 bar 平均波动”。
+# 2. 收盘价高于“开仓以来最低价 + 4 倍历史 10 日平均波动”。
 #
-# 两个平空条件任一触发，都会在下一小时 bar 开盘执行平空。历史 90 个 bar 平均
-# 波动使用前 90 个小时 bar high-low 相对 close 的比例均值，转换成开仓以来最低价
+# 两个平空条件任一触发，都会在下一小时 bar 开盘执行平空。历史 10 日平均
+# 波动使用前 10 日 high-low 相对 close 的比例均值，转换成开仓以来最低价
 # 上的价格距离。
 
 
@@ -117,7 +84,7 @@ factor_id, factor_name = parse_factor_script_metadata(__file__)
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="运行全部品种的 22 号高乖离持仓回落小时因子。"
+        description="基于小时数据按日频口径滚动计算 22 号高乖离持仓回落因子。"
     )
     parser.add_argument(
         "--hourly-dir",
@@ -130,11 +97,6 @@ def parse_args():
         type=Path,
         default=Path(os.environ.get("RESULTS_OUTPUT_DIR", DEFAULT_OUTPUT_DIR)),
         help=f"因子结果目录，默认：{DEFAULT_OUTPUT_DIR}",
-    )
-    parser.add_argument(
-        "--collect-only",
-        action="store_true",
-        help="不重新计算因子，只基于 output-dir 中已有 summary 生成全品种汇总。",
     )
     parser.add_argument(
         "--keep-going",
@@ -165,25 +127,6 @@ def discover_symbols(hourly_dir):
     return symbols
 
 
-def discover_symbols_from_summaries(output_dir):
-    summary_dir = output_dir / "tables" / "summary"
-    if not summary_dir.is_dir():
-        raise FileNotFoundError(f"summary 目录不存在：{summary_dir}")
-
-    suffix = f"_{factor_id}_{factor_name}_summary.csv"
-    symbols = sorted(
-        path.name[: -len(suffix)].upper()
-        for path in summary_dir.glob(f"*{suffix}")
-        if path.is_file() and not path.name.startswith("all_symbols_")
-    )
-    if not symbols:
-        raise FileNotFoundError(
-            f"summary 目录中没有 {factor_id} 号因子的单品种汇总：{summary_dir}"
-        )
-
-    return symbols
-
-
 def load_hourly(symbol, hourly_dir):
     hourly_path = hourly_dir / f"{symbol}_hourly.csv"
     if not hourly_path.exists():
@@ -192,12 +135,11 @@ def load_hourly(symbol, hourly_dir):
     hourly = pd.read_csv(hourly_path)
     required_columns = {
         "date",
+        "trading_date",
         "open",
         "close",
         "high",
         "low",
-        "volume",
-        "total_turnover",
         "open_interest",
     }
     missing_columns = required_columns - set(hourly.columns)
@@ -206,40 +148,192 @@ def load_hourly(symbol, hourly_dir):
         raise ValueError(f"{hourly_path} 缺少必要列：{missing_text}")
 
     hourly["date"] = pd.to_datetime(hourly["date"])
-    if "trading_date" in hourly.columns:
-        hourly["trading_date"] = pd.to_datetime(hourly["trading_date"])
-
+    hourly["trading_date"] = pd.to_datetime(hourly["trading_date"])
     numeric_columns = [
         "open",
         "close",
         "high",
         "low",
-        "volume",
-        "total_turnover",
         "open_interest",
     ]
     for column in numeric_columns:
         hourly[column] = pd.to_numeric(hourly[column], errors="coerce")
 
-    return hourly.sort_values("date").reset_index(drop=True)
+    return hourly.sort_values(["trading_date", "date"]).reset_index(drop=True)
 
 
-def positive_part(series):
-    return series.clip(lower=0).fillna(0)
+def build_intraday_daily_bars(hourly):
+    bars = hourly.sort_values(["trading_date", "date"]).reset_index(drop=True)
+    grouped = bars.groupby("trading_date", sort=False)
+
+    # 把小时 bar 转成“截至当前小时”的日 K：
+    # open 取当日第一根小时 bar 开盘价，close 取当前小时收盘价。
+    # high/low 分别取当日截至当前小时的最高价/最低价。
+    # open_interest 使用当前小时持仓量，用来判断截至当前小时的持仓趋势。
+    daily = pd.DataFrame(
+        {
+            "date": bars["date"],
+            "trading_date": bars["trading_date"],
+            "hourly_open": bars["open"],
+            "hourly_low": bars["low"],
+            "open": grouped["open"].transform("first"),
+            "close": bars["close"],
+            "high": grouped["high"].cummax(),
+            "low": grouped["low"].cummin(),
+            "open_interest": bars["open_interest"],
+        }
+    )
+
+    return daily
 
 
-def linear_regression_slope(values):
-    values = np.asarray(values, dtype=float)
-    if np.isnan(values).any():
-        return np.nan
+def build_full_daily_bars(daily):
+    # 每个交易日最后一根“截至当前小时”的日 K 等同于完整日 K，
+    # 后续滚动窗口只用这些完整日 K 做历史部分，避免引用未来小时。
+    return (
+        daily.groupby("trading_date", sort=False)
+        .tail(1)
+        .copy()
+        .set_index("trading_date", drop=False)
+    )
 
-    x = np.arange(len(values), dtype=float)
-    x = x - x.mean()
-    denominator = np.square(x).sum()
-    if denominator == 0:
-        return np.nan
 
-    return np.dot(x, values - values.mean()) / denominator
+def map_daily_series(daily, series):
+    return daily["trading_date"].map(series)
+
+
+def add_daily_rolling_mean(daily, full_daily, source_column, output_column, window):
+    if window <= 1:
+        daily[output_column] = daily[source_column]
+        return
+
+    # 截至当前小时的日频均线：
+    # MA_n = (前 n-1 个完整交易日 source 之和 + 当前截至小时 source) / n。
+    # 这样当前交易日只使用已发生的小时信息，不会偷看当天后续 bar。
+    prior_sum = (
+        full_daily[source_column]
+        .shift(1)
+        .rolling(window=window - 1, min_periods=window - 1)
+        .sum()
+    )
+    daily[output_column] = (
+        map_daily_series(daily, prior_sum) + daily[source_column]
+    ) / window
+
+
+def add_daily_regression_down_signal(
+    daily,
+    full_daily,
+    source_column,
+    output_column,
+    window,
+):
+    if window <= 1:
+        daily[output_column] = 0
+        return
+
+    # 用普通最小二乘的一元线性回归斜率判断趋势方向。
+    # x 取 0,1,...,window-1 并中心化，斜率公式为：
+    # slope = sum((x - mean(x)) * y) / sum((x - mean(x))^2)。
+    # y 由前 window-1 个完整交易日值 + 当前截至小时值组成。
+    weights = np.arange(window, dtype=float)
+    weights = weights - weights.mean()
+    denominator = np.square(weights).sum()
+
+    # 历史部分先在完整日 K 上滚动计算加权和，当前小时再补上最后一个权重。
+    prior_values = full_daily[source_column].shift(1)
+    prior_window = window - 1
+    prior_weighted_sum = prior_values.rolling(
+        window=prior_window,
+        min_periods=prior_window,
+    ).apply(lambda values: np.dot(weights[:-1], values), raw=True)
+
+    slope = (
+        map_daily_series(daily, prior_weighted_sum)
+        + weights[-1] * daily[source_column]
+    ) / denominator
+    # 斜率小于 0 表示最近 window 个交易日口径下该变量在回落。
+    daily[output_column] = (slope < 0).astype(int)
+
+
+def add_daily_frequency_features(daily):
+    daily = daily.copy()
+    full_daily = build_full_daily_bars(daily)
+
+    # 三条日频均线都按“前完整交易日 + 当前截至小时日 K”的口径计算。
+    # ma5 代表短期成本，ma20 代表中期成本，ma60 代表更长期趋势成本。
+    add_daily_rolling_mean(daily, full_daily, "close", "ma5", MA_SHORT_WINDOW)
+    add_daily_rolling_mean(daily, full_daily, "close", "ma20", MA_LONG_WINDOW)
+    add_daily_rolling_mean(daily, full_daily, "close", "ma60", MA_TREND_WINDOW)
+
+    # 价格相对均线的乖离率：
+    # close_maN_bias = close / maN - 1。
+    # 数值越负，表示当前价格越低于对应均线。
+    close_ma5_bias = daily["close"] / daily["ma5"] - 1
+    close_ma20_bias = daily["close"] / daily["ma20"] - 1
+    close_ma60_bias = daily["close"] / daily["ma60"] - 1
+
+    # 中短期乖离差：
+    # close_ma20_bias - close_ma5_bias >= 4%。
+    # 当价格相对 ma5 更弱、相对 ma20 没那么弱时，说明短期下跌更急。
+    ma_bias_spread_signal = (
+        close_ma20_bias - close_ma5_bias >= MA_BIAS_SPREAD_THRESHOLD
+    )
+
+    # 长中期乖离差：
+    # close_ma60_bias - close_ma20_bias >= 10%。
+    # 用来确认价格相对中期均线的下跌也足够明显，不只是短线波动。
+    ma_long_bias_spread_signal = (
+        close_ma60_bias - close_ma20_bias >= MA_LONG_BIAS_SPREAD_THRESHOLD
+    )
+
+    # 持仓量回归斜率小于 0：持仓量趋势在下降。
+    add_daily_regression_down_signal(
+        daily,
+        full_daily,
+        "open_interest",
+        OI_REGRESSION_SLOPE_DOWN_COLUMN,
+        OI_REGRESSION_SLOPE_WINDOW,
+    )
+    # 收盘价回归斜率小于 0：价格趋势也在下降。
+    add_daily_regression_down_signal(
+        daily,
+        full_daily,
+        "close",
+        CLOSE_REGRESSION_SLOPE_DOWN_COLUMN,
+        CLOSE_REGRESSION_SLOPE_WINDOW,
+    )
+
+    # 单日波动率近似为 (high - low) / close，
+    # 衡量当天价格振幅占收盘价的比例。
+    full_daily["price_range_rate"] = (
+        (full_daily["high"] - full_daily["low"])
+        / full_daily["close"].replace(0, np.nan)
+    )
+    # 历史平均波动只用前 VOLATILITY_WINDOW 个完整交易日，
+    # 后面平仓止损会把这个比例换算成价格距离。
+    avg_volatility_rate = (
+        full_daily["price_range_rate"]
+        .shift(1)
+        .rolling(window=VOLATILITY_WINDOW, min_periods=VOLATILITY_WINDOW)
+        .mean()
+    )
+    daily["avg_volatility_rate_10"] = map_daily_series(
+        daily,
+        avg_volatility_rate,
+    )
+
+    # 开空信号四个条件同时满足：
+    # 1. 中短期乖离差达标；2. 长中期乖离差达标；
+    # 3. 持仓量回归斜率向下；4. 价格回归斜率向下。
+    daily["open_short_signal"] = (
+        ma_bias_spread_signal
+        & ma_long_bias_spread_signal
+        & (daily[OI_REGRESSION_SLOPE_DOWN_COLUMN] == 1)
+        & (daily[CLOSE_REGRESSION_SLOPE_DOWN_COLUMN] == 1)
+    ).astype(int)
+
+    return daily
 
 
 def exit_reason_from_signals(price_above_entry_signal, trailing_rebound_signal):
@@ -253,117 +347,101 @@ def exit_reason_from_signals(price_above_entry_signal, trailing_rebound_signal):
 
 
 def build_short_state_machine(frame):
-    """根据前一根 bar 信号在当前 bar 开盘执行交易，并输出逐 bar 持仓状态。"""
-    bars = frame.copy()
-    bars["actual_open_short_signal"] = (
-        bars["open_short_signal"].shift(1).fillna(0).astype(int)
-    )
+    """根据上一小时信号在当前小时开盘执行交易。"""
+    daily = frame.copy()
 
     position = 0
     entry_price = np.nan
     low_since_entry = np.nan
+    pending_open = False
     pending_cover = False
-    pending_price_above_entry = False
-    pending_trailing_rebound = False
     pending_exit_reason = ""
 
     positions = []
     trade_signals = []
-    trade_actions = []
     entry_prices = []
     exit_prices = []
     exit_reasons = []
-    low_since_entry_values = []
-    trailing_stop_distances = []
     trailing_stop_prices = []
-    price_above_entry_signals = []
-    trailing_rebound_signals = []
     cover_short_signals = []
-    cover_signal_reasons = []
-    actual_cover_short_signals = []
-    actual_price_above_entry_signals = []
-    actual_trailing_rebound_signals = []
 
-    for _, row in bars.iterrows():
-        open_price = row["open"]
+    for _, row in daily.iterrows():
+        open_price = row.get("hourly_open", row["open"])
         close = row["close"]
-        low = row["low"]
-        avg_volatility_rate = row[AVG_VOLATILITY_RATE_COLUMN]
+        low = row.get("hourly_low", row["low"])
+        avg_volatility_rate = row["avg_volatility_rate_10"]
 
-        actual_open_signal = int(row["actual_open_short_signal"]) == 1
-        actual_cover_signal = bool(pending_cover)
-        actual_price_above_entry_signal = int(pending_price_above_entry)
-        actual_trailing_rebound_signal = int(pending_trailing_rebound)
+        # 上一小时收盘确认的信号，在当前小时开盘执行。
+        # actual_open_signal/actual_cover_signal 只负责“本小时是否执行交易”。
+        actual_open_signal = pending_open
+        actual_cover_signal = pending_cover
         actual_exit_reason = pending_exit_reason
-
+        pending_open = False
         pending_cover = False
-        pending_price_above_entry = False
-        pending_trailing_rebound = False
         pending_exit_reason = ""
 
         trade_signal = 0
-        trade_action = ""
         exit_reason = ""
-        row_exit_price = np.nan
-        opened_current_bar = False
         row_entry_price = entry_price if position == -1 else np.nan
-        row_low_since_entry = low_since_entry if position == -1 else np.nan
+        row_exit_price = np.nan
+        opened_this_bar = False
 
         if position == -1 and actual_cover_signal and pd.notna(open_price):
+            # 平空执行价 = 当前小时开盘价。
             trade_signal = 1
-            trade_action = "cover_short"
             exit_reason = actual_exit_reason or "cover_short"
             row_entry_price = entry_price
-            row_low_since_entry = low_since_entry
             row_exit_price = open_price
             position = 0
             entry_price = np.nan
             low_since_entry = np.nan
         elif position == 0 and actual_open_signal and pd.notna(open_price):
+            # 开空执行价 = 当前小时开盘价。
             trade_signal = -1
-            trade_action = "open_short"
             entry_price = open_price
             low_since_entry = open_price
             row_entry_price = entry_price
-            row_low_since_entry = low_since_entry
             position = -1
-            opened_current_bar = True
+            opened_this_bar = True
 
-        price_above_entry_signal = 0
-        trailing_rebound_signal = 0
         cover_short_signal = 0
         cover_signal_reason = ""
-        trailing_stop_distance = np.nan
         trailing_stop_price = np.nan
 
         if position == -1:
             low_candidate = low
             if pd.isna(low_candidate):
-                low_candidate = open_price if opened_current_bar else close
+                low_candidate = open_price if opened_this_bar else close
             if pd.notna(low_candidate):
+                # 开仓以来最低价：
+                # low_since_entry = min(原最低价, 当前小时最低价)。
+                # 空头移动止损线会跟随这个最低价向下移动。
                 low_since_entry = min(low_since_entry, low_candidate)
 
-            row_low_since_entry = low_since_entry
             row_entry_price = entry_price
-            price_above_entry_signal = int(
+            # 平仓条件 1：当前收盘价高于开仓价，说明空头已经亏损或回到不利区间。
+            price_above_entry_signal = (
                 pd.notna(close)
                 and pd.notna(entry_price)
                 and close > entry_price
             )
+            trailing_rebound_signal = False
 
             if (
                 pd.notna(close)
                 and pd.notna(low_since_entry)
                 and pd.notna(avg_volatility_rate)
             ):
-                trailing_stop_distance = (
-                    low_since_entry
-                    * avg_volatility_rate
-                    * TRAILING_VOLATILITY_MULTIPLIER
+                # 平仓条件 2 的移动止损价：
+                # trailing_stop_price =
+                #     开仓以来最低价 * (1 + 历史平均波动率 * 倍数)。
+                # 当价格从低点反弹超过这个距离时，认为下跌动能减弱，准备平空。
+                trailing_stop_price = low_since_entry * (
+                    1 + avg_volatility_rate * TRAILING_VOLATILITY_MULTIPLIER
                 )
-                trailing_stop_price = low_since_entry + trailing_stop_distance
-                trailing_rebound_signal = int(close > trailing_stop_price)
+                trailing_rebound_signal = close > trailing_stop_price
 
+            # 两个平仓条件任意一个触发，就在下一小时开盘平空。
             cover_short_signal = int(
                 price_above_entry_signal or trailing_rebound_signal
             )
@@ -371,210 +449,113 @@ def build_short_state_machine(frame):
                 price_above_entry_signal,
                 trailing_rebound_signal,
             )
-            pending_cover = bool(cover_short_signal)
-            pending_price_above_entry = bool(price_above_entry_signal)
-            pending_trailing_rebound = bool(trailing_rebound_signal)
-            pending_exit_reason = cover_signal_reason
+
+        # 当前小时收盘后确认下一小时要执行的开仓/平仓信号。
+        pending_open = bool(row["open_short_signal"])
+        pending_cover = bool(cover_short_signal)
+        pending_exit_reason = cover_signal_reason
 
         positions.append(position)
         trade_signals.append(trade_signal)
-        trade_actions.append(trade_action)
         entry_prices.append(row_entry_price)
         exit_prices.append(row_exit_price)
         exit_reasons.append(exit_reason)
-        low_since_entry_values.append(row_low_since_entry)
-        trailing_stop_distances.append(trailing_stop_distance)
         trailing_stop_prices.append(trailing_stop_price)
-        price_above_entry_signals.append(price_above_entry_signal)
-        trailing_rebound_signals.append(trailing_rebound_signal)
         cover_short_signals.append(cover_short_signal)
-        cover_signal_reasons.append(cover_signal_reason)
-        actual_cover_short_signals.append(int(actual_cover_signal))
-        actual_price_above_entry_signals.append(actual_price_above_entry_signal)
-        actual_trailing_rebound_signals.append(actual_trailing_rebound_signal)
 
-    bars["actual_cover_short_signal"] = actual_cover_short_signals
-    bars["position"] = positions
-    bars["trade_signal"] = trade_signals
-    bars["trade_action"] = trade_actions
-    bars["entry_price"] = entry_prices
-    bars["exit_price"] = exit_prices
-    bars["exit_reason"] = exit_reasons
-    bars["low_since_entry"] = low_since_entry_values
-    bars["trailing_stop_distance"] = trailing_stop_distances
-    bars["trailing_stop_price"] = trailing_stop_prices
-    bars["price_above_entry_signal"] = price_above_entry_signals
-    bars["trailing_rebound_signal"] = trailing_rebound_signals
-    bars["cover_short_signal"] = cover_short_signals
-    bars["cover_signal_reason"] = cover_signal_reasons
-    bars["actual_price_above_entry_signal"] = actual_price_above_entry_signals
-    bars["actual_trailing_rebound_signal"] = actual_trailing_rebound_signals
-    bars["short_entry_signal"] = (bars["trade_signal"] == -1).astype(int)
-    bars["short_exit_signal"] = (bars["trade_signal"] == 1).astype(int)
+    daily["position"] = positions
+    daily["trade_signal"] = trade_signals
+    daily["entry_price"] = entry_prices
+    daily["exit_price"] = exit_prices
+    daily["exit_reason"] = exit_reasons
+    daily["trailing_stop_price"] = trailing_stop_prices
+    daily["cover_short_signal"] = cover_short_signals
+    # trade_signal: -1 表示本小时开空，1 表示本小时平空，0 表示无交易。
+    daily["short_entry_signal"] = (daily["trade_signal"] == -1).astype(int)
+    daily["short_exit_signal"] = (daily["trade_signal"] == 1).astype(int)
 
-    return bars
+    return daily
 
 
-def calculate_max_drawdown(return_series):
-    equity_curve = (1 + return_series.fillna(0)).cumprod()
-    if equity_curve.empty:
-        return np.nan
-
-    running_high = equity_curve.cummax()
-    drawdown = equity_curve / running_high - 1
-    return drawdown.min()
-
-
-def annualized_sharpe(return_series):
-    returns = return_series.fillna(0)
-    std = returns.std(ddof=1)
-    if pd.isna(std) or std == 0:
-        return np.nan
-
-    return returns.mean() / std * np.sqrt(HOURLY_BARS_PER_YEAR)
-
-
-def build_signal_table(bars, feature_columns):
-    base_columns = [
-        "factor_id",
-        "factor_name",
-        "signal_date",
-    ]
-    if "trading_date" in bars.columns:
-        base_columns.append("trading_date")
-    base_columns += [
-        "signal_close",
-        "factor_value",
-    ]
-    output_columns = base_columns.copy()
-
-    for col in feature_columns:
-        if col in bars.columns and col not in output_columns:
-            output_columns.append(col)
-
-    signal_points = bars[bars["signal"] == 1].copy()
-    if len(signal_points) == 0:
-        return pd.DataFrame(columns=output_columns)
-
-    signal_table = signal_points.rename(
-        columns={
-            "date": "signal_date",
-            "close": "signal_close",
-        }
-    )
-
-    return signal_table[output_columns].copy()
-
-
-def build_summary_table(bars, feature_columns):
-    signal_points = bars[bars["signal"] == 1].copy()
-
-    if len(signal_points) > 0:
-        first_signal_date = signal_points["date"].min()
-        first_signal_close = signal_points.loc[
-            signal_points["date"].idxmin(),
-            "close",
-        ]
-    else:
-        first_signal_date = pd.NaT
-        first_signal_close = np.nan
-
-    row = {
-        "factor_id": factor_id,
-        "factor_name": factor_name,
-        "total_bars": len(bars),
-        "valid_factor_bars": int(bars["factor_value"].notna().sum()),
-        "signal_bars": int(bars["signal"].sum()),
-        "signal_ratio": bars["signal"].mean(),
-        "first_signal_date": first_signal_date,
-        "first_signal_close": first_signal_close,
-        "mean_factor_value": bars["factor_value"].mean(),
-        "max_factor_value": bars["factor_value"].max(),
-        "min_factor_value": bars["factor_value"].min(),
-    }
-
-    for col in feature_columns:
-        if col not in bars.columns:
-            continue
-        if not pd.api.types.is_numeric_dtype(bars[col]):
-            continue
-
-        row[f"mean_{col}"] = bars[col].mean()
-
-    return pd.DataFrame([row])
-
-
-def build_plot_trade_table(bars):
+def build_trade_table(symbol, daily):
     columns = [
+        "symbol",
         "status",
         "entry_date",
-        "exit_date",
+        "entry_trading_date",
         "entry_price",
+        "exit_date",
+        "exit_trading_date",
         "exit_price",
+        "exit_reason",
     ]
-    if "trade_signal" not in bars.columns:
+    if "trade_signal" not in daily.columns:
         return pd.DataFrame(columns=columns)
 
-    plot_bars = bars.copy()
-    plot_bars["trade_signal"] = (
-        pd.to_numeric(plot_bars["trade_signal"], errors="coerce")
+    trades = []
+    open_trade = None
+    trade_frame = daily.copy()
+    trade_frame["trade_signal"] = (
+        pd.to_numeric(trade_frame["trade_signal"], errors="coerce")
         .fillna(0)
         .astype(int)
     )
 
-    trades = []
-    open_trade = None
-
-    for _, row in plot_bars.iterrows():
+    for _, row in trade_frame.iterrows():
         if row["trade_signal"] == -1 and open_trade is None:
-            entry_price = row.get("entry_price", np.nan)
-            if pd.isna(entry_price):
-                entry_price = row["open"]
+            # 记录一笔空头交易的开仓时间和开仓价。
             open_trade = {
                 "entry_date": row["date"],
-                "entry_price": entry_price,
+                "entry_trading_date": row["trading_date"],
+                "entry_price": row["entry_price"],
             }
             continue
 
         if row["trade_signal"] == 1 and open_trade is not None:
-            exit_price = row.get("exit_price", np.nan)
-            if pd.isna(exit_price):
-                exit_price = row["open"]
+            # 遇到平仓信号后，把开仓信息和平仓信息合并成一行交易记录。
             trades.append(
                 {
+                    "symbol": symbol,
                     "status": "closed",
                     "entry_date": open_trade["entry_date"],
-                    "exit_date": row["date"],
+                    "entry_trading_date": open_trade["entry_trading_date"],
                     "entry_price": open_trade["entry_price"],
-                    "exit_price": exit_price,
+                    "exit_date": row["date"],
+                    "exit_trading_date": row["trading_date"],
+                    "exit_price": row["exit_price"],
+                    "exit_reason": row["exit_reason"],
                 }
             )
             open_trade = None
 
-    if open_trade is not None and not plot_bars.empty:
-        last_row = plot_bars.iloc[-1]
+    if open_trade is not None:
+        # 样本结束时仍未平仓的交易保留为 open，不填平仓价。
         trades.append(
             {
+                "symbol": symbol,
                 "status": "open",
                 "entry_date": open_trade["entry_date"],
-                "exit_date": last_row["date"],
+                "entry_trading_date": open_trade["entry_trading_date"],
                 "entry_price": open_trade["entry_price"],
-                "exit_price": last_row["close"],
+                "exit_date": pd.NaT,
+                "exit_trading_date": pd.NaT,
+                "exit_price": np.nan,
+                "exit_reason": "",
             }
         )
 
     return pd.DataFrame(trades, columns=columns)
 
 
-def plot_signal_trades(bars, figure_path, title):
+def plot_signal_trades(daily, trades, figure_path, title):
     fig, ax = plt.subplots(figsize=(12, 6))
-    ax.plot(bars["date"], bars["close"], color="#1f77b4", label="close")
+    ax.plot(daily["date"], daily["close"], color="#1f77b4", label="close")
 
-    if "trailing_stop_price" in bars.columns:
-        trailing_line = bars["trailing_stop_price"].where(bars["position"] == -1)
+    if "trailing_stop_price" in daily.columns:
+        trailing_line = daily["trailing_stop_price"].where(daily["position"] == -1)
         if trailing_line.notna().any():
             ax.plot(
-                bars["date"],
+                daily["date"],
                 trailing_line,
                 color="#9467bd",
                 linewidth=1.0,
@@ -582,25 +563,33 @@ def plot_signal_trades(bars, figure_path, title):
                 label="trailing stop",
             )
 
-    trades = build_plot_trade_table(bars)
     if not trades.empty:
         interval_labeled = False
         segment_labeled = False
+        last_date = daily["date"].iloc[-1]
+        last_close = daily["close"].iloc[-1]
 
         for _, trade in trades.iterrows():
             is_closed = trade["status"] == "closed"
+            # 未平仓交易在图上延伸到样本最后一根 bar，
+            # 只用于展示持仓区间，不写入交易表的平仓字段。
+            exit_date = trade["exit_date"] if is_closed else last_date
+            exit_price = trade["exit_price"] if is_closed else last_close
+
+            # 橙色阴影表示空头持仓区间。
             ax.axvspan(
                 trade["entry_date"],
-                trade["exit_date"],
+                exit_date,
                 color="#f59e0b",
                 alpha=0.12,
                 label="short interval" if not interval_labeled else None,
             )
             interval_labeled = True
 
+            # 橙色线段连接开仓价和平仓价；未平仓交易用虚线连接到最后价格。
             ax.plot(
-                [trade["entry_date"], trade["exit_date"]],
-                [trade["entry_price"], trade["exit_price"]],
+                [trade["entry_date"], exit_date],
+                [trade["entry_price"], exit_price],
                 color="#f97316",
                 linewidth=1.8,
                 linestyle="-" if is_closed else "--",
@@ -645,410 +634,66 @@ def plot_signal_trades(bars, figure_path, title):
     plt.close(fig)
 
 
-def save_factor_outputs(
-    bars,
-    symbol,
-    factor_value_column,
-    signal_column,
-    feature_columns,
-    output_dir,
-):
-    bars = bars.copy()
-
-    bars["factor_id"] = factor_id
-    bars["factor_name"] = factor_name
-    bars["factor_value"] = bars[factor_value_column]
-    bars["signal"] = bars[signal_column].fillna(0).astype(int)
-
-    tables_dir = output_dir / "tables"
-    factor_figures_dir = output_dir / "figures" / "factors"
-
-    factor_output_path = (
-        tables_dir / "factors" / f"{symbol}_{factor_id}_{factor_name}.csv"
-    )
-    signal_output_path = (
-        tables_dir
-        / "signals"
-        / f"{symbol}_{factor_id}_{factor_name}_signals.csv"
-    )
-    summary_output_path = (
-        tables_dir
-        / "summary"
-        / f"{symbol}_{factor_id}_{factor_name}_summary.csv"
-    )
-    price_figure_path = (
-        factor_figures_dir
+def save_symbol_figure(daily, trades, symbol, output_dir):
+    figure_path = (
+        output_dir
+        / "figures"
+        / "factors"
         / f"{symbol}_{factor_id}_{factor_name}_signal_on_price.png"
     )
-
-    base_columns = [
-        "date",
-        "trading_date",
-        "open",
-        "close",
-        "high",
-        "low",
-        "volume",
-        "total_turnover",
-        "open_interest",
-        "speculation",
-        "threshold",
-        "factor_id",
-        "factor_name",
-        "factor_value",
-    ]
-
-    output_columns = []
-    for col in base_columns + feature_columns + ["signal"]:
-        if col in bars.columns and col not in output_columns:
-            output_columns.append(col)
-
-    factor_bar = bars[output_columns].copy()
-    signal_table = build_signal_table(bars, feature_columns)
-    summary_table = build_summary_table(bars, feature_columns)
-    summary_table.insert(0, "symbol", symbol)
-
-    factor_output_path.parent.mkdir(parents=True, exist_ok=True)
-    signal_output_path.parent.mkdir(parents=True, exist_ok=True)
-    summary_output_path.parent.mkdir(parents=True, exist_ok=True)
-    price_figure_path.parent.mkdir(parents=True, exist_ok=True)
-
-    factor_bar.to_csv(factor_output_path, index=False)
-    signal_table.to_csv(signal_output_path, index=False)
-    summary_table.to_csv(summary_output_path, index=False)
-
+    figure_path.parent.mkdir(parents=True, exist_ok=True)
     plot_signal_trades(
-        bars,
-        price_figure_path,
+        daily,
+        trades,
+        figure_path,
         f"{symbol} Factor {factor_id}: {factor_name}",
     )
-
-    print(f"[{symbol}] factor {factor_id}: {factor_name} complete.", flush=True)
-    print(f"[{symbol}] factor bar table: {factor_output_path}", flush=True)
-    print(f"[{symbol}] signal table: {signal_output_path}", flush=True)
-    print(f"[{symbol}] summary table: {summary_output_path}", flush=True)
-    print(f"[{symbol}] signal bars: {int(bars['signal'].sum())}", flush=True)
-
-    return {
-        "factor_bar": factor_bar,
-        "signal_table": signal_table,
-        "summary_table": summary_table,
-        "factor_output_path": factor_output_path,
-        "signal_output_path": signal_output_path,
-        "summary_output_path": summary_output_path,
-        "price_figure_path": price_figure_path,
-    }
+    return figure_path
 
 
 def calculate_symbol(symbol, hourly_dir, output_dir):
-    bars = load_hourly(symbol, hourly_dir)
+    hourly = load_hourly(symbol, hourly_dir)
+    if hourly.empty:
+        raise ValueError(f"{symbol} 小时频率数据为空。")
 
-    bars[MA_SHORT_COLUMN] = (
-        bars["close"]
-        .rolling(window=MA_SHORT_WINDOW, min_periods=MA_SHORT_WINDOW)
-        .mean()
-    )
-    bars[MA_LONG_COLUMN] = (
-        bars["close"]
-        .rolling(window=MA_LONG_WINDOW, min_periods=MA_LONG_WINDOW)
-        .mean()
-    )
-    bars[MA_TREND_COLUMN] = (
-        bars["close"]
-        .rolling(window=MA_TREND_WINDOW, min_periods=MA_TREND_WINDOW)
-        .mean()
-    )
-    bars[MA_SHORT_LONG_RATIO_COLUMN] = (
-        bars[MA_SHORT_COLUMN] / bars[MA_LONG_COLUMN]
-    )
-    bars[BIAS_SHORT_LONG_COLUMN] = bars[MA_SHORT_LONG_RATIO_COLUMN] - 1
-    bars[BIAS_SHORT_GT_LONG_COLUMN] = (
-        bars[MA_SHORT_COLUMN] > bars[MA_LONG_COLUMN]
-    ).astype(int)
-    bars[MA_LONG_TREND_RATIO_COLUMN] = (
-        bars[MA_LONG_COLUMN] / bars[MA_TREND_COLUMN]
-    )
-    bars[BIAS_LONG_TREND_COLUMN] = bars[MA_LONG_TREND_RATIO_COLUMN] - 1
-    bars[BIAS_LONG_GT_TREND_COLUMN] = (
-        bars[MA_LONG_COLUMN] > bars[MA_TREND_COLUMN]
-    ).astype(int)
-    bars[CLOSE_MA_SHORT_BIAS_COLUMN] = (
-        bars["close"] / bars[MA_SHORT_COLUMN] - 1
-    )
-    bars[CLOSE_MA_LONG_BIAS_COLUMN] = (
-        bars["close"] / bars[MA_LONG_COLUMN] - 1
-    )
-    bars[CLOSE_MA_TREND_BIAS_COLUMN] = (
-        bars["close"] / bars[MA_TREND_COLUMN] - 1
-    )
-    bars["ma_bias_spread"] = (
-        bars[CLOSE_MA_LONG_BIAS_COLUMN] - bars[CLOSE_MA_SHORT_BIAS_COLUMN]
-    )
-    bars["ma_bias_spread_signal"] = (
-        bars["ma_bias_spread"] >= MA_BIAS_SPREAD_THRESHOLD
-    ).astype(int)
-    bars["ma_long_bias_spread"] = (
-        bars[CLOSE_MA_TREND_BIAS_COLUMN] - bars[CLOSE_MA_LONG_BIAS_COLUMN]
-    )
-    bars["ma_long_bias_spread_signal"] = (
-        bars["ma_long_bias_spread"] >= MA_LONG_BIAS_SPREAD_THRESHOLD
-    ).astype(int)
+    daily = build_intraday_daily_bars(hourly)
+    daily = add_daily_frequency_features(daily)
+    daily = build_short_state_machine(daily)
 
-    bars[OI_REGRESSION_SLOPE_COLUMN] = (
-        bars["open_interest"]
-        .rolling(
-            window=REGRESSION_SLOPE_WINDOW,
-            min_periods=REGRESSION_SLOPE_WINDOW,
+    trades = build_trade_table(symbol, daily)
+    save_symbol_figure(daily, trades, symbol, output_dir)
+    return trades
+
+
+def save_trade_table(trade_tables, output_dir):
+    if trade_tables:
+        trades = pd.concat(trade_tables, ignore_index=True)
+        if not trades.empty:
+            trades = trades.sort_values(["symbol", "entry_date"])
+    else:
+        trades = pd.DataFrame(
+            columns=[
+                "symbol",
+                "status",
+                "entry_date",
+                "entry_trading_date",
+                "entry_price",
+                "exit_date",
+                "exit_trading_date",
+                "exit_price",
+                "exit_reason",
+            ]
         )
-        .apply(linear_regression_slope, raw=True)
-    )
-    bars[OI_REGRESSION_MEAN_COLUMN] = (
-        bars["open_interest"]
-        .rolling(
-            window=REGRESSION_SLOPE_WINDOW,
-            min_periods=REGRESSION_SLOPE_WINDOW,
-        )
-        .mean()
-    )
-    bars[OI_REGRESSION_SLOPE_RATE_COLUMN] = (
-        bars[OI_REGRESSION_SLOPE_COLUMN]
-        / bars[OI_REGRESSION_MEAN_COLUMN].replace(0, np.nan)
-    )
-    bars[OI_REGRESSION_SLOPE_DOWN_COLUMN] = (
-        bars[OI_REGRESSION_SLOPE_COLUMN] < 0
-    ).astype(int)
 
-    bars[CLOSE_REGRESSION_SLOPE_COLUMN] = (
-        bars["close"]
-        .rolling(
-            window=REGRESSION_SLOPE_WINDOW,
-            min_periods=REGRESSION_SLOPE_WINDOW,
-        )
-        .apply(linear_regression_slope, raw=True)
-    )
-    bars[CLOSE_REGRESSION_MEAN_COLUMN] = (
-        bars["close"]
-        .rolling(
-            window=REGRESSION_SLOPE_WINDOW,
-            min_periods=REGRESSION_SLOPE_WINDOW,
-        )
-        .mean()
-    )
-    bars[CLOSE_REGRESSION_SLOPE_RATE_COLUMN] = (
-        bars[CLOSE_REGRESSION_SLOPE_COLUMN]
-        / bars[CLOSE_REGRESSION_MEAN_COLUMN].replace(0, np.nan)
-    )
-    bars[CLOSE_REGRESSION_SLOPE_DOWN_COLUMN] = (
-        bars[CLOSE_REGRESSION_SLOPE_COLUMN] < 0
-    ).astype(int)
+    table_dir = output_dir / "tables"
+    table_dir.mkdir(parents=True, exist_ok=True)
 
-    bars["bar_return"] = bars["close"].pct_change()
-    bars["gap_return"] = (
-        bars["open"] / bars["close"].shift(1).replace(0, np.nan) - 1
-    )
-    bars["intrabar_return"] = (
-        bars["close"] / bars["open"].replace(0, np.nan) - 1
-    )
-    bars["price_range"] = bars["high"] - bars["low"]
-    bars["price_range_rate"] = bars["price_range"] / bars["close"].replace(
-        0,
-        np.nan,
-    )
-    bars[AVG_PRICE_RANGE_COLUMN] = (
-        bars["price_range"]
-        .shift(1)
-        .rolling(window=VOLATILITY_WINDOW, min_periods=VOLATILITY_WINDOW)
-        .mean()
-    )
-    bars[AVG_VOLATILITY_RATE_COLUMN] = (
-        bars["price_range_rate"]
-        .shift(1)
-        .rolling(window=VOLATILITY_WINDOW, min_periods=VOLATILITY_WINDOW)
-        .mean()
-    )
-
-    bars["open_short_signal"] = (
-        (bars["ma_bias_spread_signal"] == 1)
-        & (bars["ma_long_bias_spread_signal"] == 1)
-        & (bars[OI_REGRESSION_SLOPE_DOWN_COLUMN] == 1)
-        & (bars[CLOSE_REGRESSION_SLOPE_DOWN_COLUMN] == 1)
-    ).astype(int)
-
-    bars["high_bias_oi_drop_score"] = (
-        positive_part(bars[BIAS_SHORT_LONG_COLUMN])
-        + positive_part(bars["ma_bias_spread"])
-        + positive_part(bars["ma_long_bias_spread"])
-        + positive_part(-bars[OI_REGRESSION_SLOPE_RATE_COLUMN])
-        + positive_part(-bars[CLOSE_REGRESSION_SLOPE_RATE_COLUMN])
-    )
-
-    bars = build_short_state_machine(bars)
-    bars["strategy_bar_return"] = (
-        bars["position"].shift(1).fillna(0)
-        * bars["gap_return"].fillna(0)
-        + bars["position"].fillna(0) * bars["intrabar_return"].fillna(0)
-    )
-    bars["strategy_cumulative_return"] = (
-        (1 + bars["strategy_bar_return"]).cumprod() - 1
-    )
-
-    feature_columns = [
-        "bar_return",
-        "gap_return",
-        "intrabar_return",
-        MA_SHORT_COLUMN,
-        MA_LONG_COLUMN,
-        MA_TREND_COLUMN,
-        MA_SHORT_LONG_RATIO_COLUMN,
-        BIAS_SHORT_LONG_COLUMN,
-        BIAS_SHORT_GT_LONG_COLUMN,
-        MA_LONG_TREND_RATIO_COLUMN,
-        BIAS_LONG_TREND_COLUMN,
-        BIAS_LONG_GT_TREND_COLUMN,
-        CLOSE_MA_SHORT_BIAS_COLUMN,
-        CLOSE_MA_LONG_BIAS_COLUMN,
-        CLOSE_MA_TREND_BIAS_COLUMN,
-        "ma_bias_spread",
-        "ma_bias_spread_signal",
-        "ma_long_bias_spread",
-        "ma_long_bias_spread_signal",
-        OI_REGRESSION_SLOPE_COLUMN,
-        OI_REGRESSION_MEAN_COLUMN,
-        OI_REGRESSION_SLOPE_RATE_COLUMN,
-        OI_REGRESSION_SLOPE_DOWN_COLUMN,
-        CLOSE_REGRESSION_SLOPE_COLUMN,
-        CLOSE_REGRESSION_MEAN_COLUMN,
-        CLOSE_REGRESSION_SLOPE_RATE_COLUMN,
-        CLOSE_REGRESSION_SLOPE_DOWN_COLUMN,
-        "price_range",
-        "price_range_rate",
-        AVG_PRICE_RANGE_COLUMN,
-        AVG_VOLATILITY_RATE_COLUMN,
-        "open_short_signal",
-        "actual_open_short_signal",
-        "cover_short_signal",
-        "cover_signal_reason",
-        "actual_cover_short_signal",
-        "price_above_entry_signal",
-        "trailing_rebound_signal",
-        "actual_price_above_entry_signal",
-        "actual_trailing_rebound_signal",
-        "position",
-        "trade_signal",
-        "trade_action",
-        "entry_price",
-        "exit_price",
-        "low_since_entry",
-        "trailing_stop_distance",
-        "trailing_stop_price",
-        "exit_reason",
-        "short_entry_signal",
-        "short_exit_signal",
-        "strategy_bar_return",
-        "strategy_cumulative_return",
-        "high_bias_oi_drop_score",
-    ]
-
-    result = save_factor_outputs(
-        bars=bars,
-        symbol=symbol,
-        factor_value_column="high_bias_oi_drop_score",
-        signal_column="short_entry_signal",
-        feature_columns=feature_columns,
-        output_dir=output_dir,
-    )
-
-    summary_table = result["summary_table"].copy()
-    summary_table["bar_frequency"] = BAR_FREQUENCY
-    summary_table["window_unit"] = WINDOW_UNIT
-    summary_table["ma_short_window"] = MA_SHORT_WINDOW
-    summary_table["ma_long_window"] = MA_LONG_WINDOW
-    summary_table["ma_trend_window"] = MA_TREND_WINDOW
-    summary_table["ma_bias_spread_threshold"] = MA_BIAS_SPREAD_THRESHOLD
-    summary_table["ma_long_bias_spread_threshold"] = (
-        MA_LONG_BIAS_SPREAD_THRESHOLD
-    )
-    summary_table["regression_slope_window"] = REGRESSION_SLOPE_WINDOW
-    summary_table["volatility_window"] = VOLATILITY_WINDOW
-    summary_table["trailing_volatility_multiplier"] = (
-        TRAILING_VOLATILITY_MULTIPLIER
-    )
-    summary_table["raw_open_short_signal_bars"] = int(
-        bars["open_short_signal"].sum()
-    )
-    summary_table["raw_cover_short_signal_bars"] = int(
-        bars["cover_short_signal"].sum()
-    )
-    summary_table["short_entry_count"] = int(bars["short_entry_signal"].sum())
-    summary_table["short_exit_count"] = int(bars["short_exit_signal"].sum())
-    summary_table["price_above_entry_exit_count"] = int(
-        bars["exit_reason"].str.contains("price_above_entry", na=False).sum()
-    )
-    summary_table["trailing_rebound_exit_count"] = int(
-        bars["exit_reason"].str.contains("trailing_rebound", na=False).sum()
-    )
-    summary_table["combined_exit_count"] = int(
-        (
-            bars["exit_reason"]
-            == "price_above_entry_and_trailing_rebound"
-        ).sum()
-    )
-    summary_table["final_position"] = int(bars["position"].iloc[-1])
-    summary_table["mean_strategy_bar_return"] = bars[
-        "strategy_bar_return"
-    ].mean()
-    summary_table["strategy_cumulative_return"] = bars[
-        "strategy_cumulative_return"
-    ].iloc[-1]
-    summary_table["strategy_max_drawdown"] = calculate_max_drawdown(
-        bars["strategy_bar_return"]
-    )
-    summary_table["strategy_sharpe"] = annualized_sharpe(
-        bars["strategy_bar_return"]
-    )
-    summary_table.to_csv(result["summary_output_path"], index=False)
-
-    return summary_table
-
-
-def read_factor_summary(symbol, output_dir):
-    summary_path = (
-        output_dir
-        / "tables"
-        / "summary"
-        / f"{symbol}_{factor_id}_{factor_name}_summary.csv"
-    )
-    if not summary_path.exists():
-        return None
-
-    summary = pd.read_csv(summary_path)
-    if "symbol" not in summary.columns:
-        summary.insert(0, "symbol", symbol)
-    return summary
-
-
-def save_combined_summaries(symbols, output_dir):
-    summaries = []
-    for symbol in symbols:
-        summary = read_factor_summary(symbol, output_dir)
-        if summary is not None:
-            summaries.append(summary)
-
-    if not summaries:
-        raise FileNotFoundError(f"没有找到可汇总的 {factor_id} 号因子 summary。")
-
-    combined_summary = pd.concat(summaries, ignore_index=True)
-    combined_summary = combined_summary.sort_values("symbol")
-
-    summary_dir = output_dir / "tables" / "summary"
-    summary_dir.mkdir(parents=True, exist_ok=True)
-
-    summary_path = summary_dir / f"all_symbols_{factor_id}_{factor_name}_summary.csv"
-    combined_summary.to_csv(summary_path, index=False)
+    table_path = table_dir / f"all_symbols_{factor_id}_{factor_name}_trades.csv"
+    trades.to_csv(table_path, index=False)
 
     return {
-        "summary_path": summary_path,
-        "summary_count": len(summaries),
+        "table_path": table_path,
+        "trade_count": len(trades),
     }
 
 
@@ -1056,41 +701,31 @@ def main():
     args = parse_args()
     hourly_dir = args.hourly_dir.resolve()
     output_dir = args.output_dir.resolve()
+    symbols = discover_symbols(hourly_dir)
+    trade_tables = []
     failures = []
-
-    if args.collect_only:
-        symbols = discover_symbols_from_summaries(output_dir)
-    else:
-        symbols = discover_symbols(hourly_dir)
 
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"chapter2 小时频率目录：{hourly_dir}", flush=True)
-    print(f"本次运行品种数量：{len(symbols)}", flush=True)
-    print(f"品种列表：{','.join(symbols)}", flush=True)
-    print(f"因子结果目录：{output_dir}", flush=True)
+    for symbol in symbols:
+        try:
+            trade_tables.append(calculate_symbol(symbol, hourly_dir, output_dir))
+        except Exception as exc:
+            if not args.keep_going:
+                raise
 
-    if not args.collect_only:
-        for symbol in symbols:
-            print(f"\n###### 开始处理品种：{symbol} ######", flush=True)
-            try:
-                calculate_symbol(symbol, hourly_dir, output_dir)
-            except Exception as exc:
-                if not args.keep_going:
-                    raise
+            failures.append((symbol, exc))
+            print(f"[{symbol}] 失败：{exc}", flush=True)
 
-                failures.append((symbol, exc))
-                print(f"\n!!!!!! 品种 {symbol} 处理失败：{exc} !!!!!!", flush=True)
+    table_info = save_trade_table(trade_tables, output_dir)
 
-    summary_info = save_combined_summaries(symbols, output_dir)
-
-    print("\n全部因子任务完成。", flush=True)
     print(f"成功处理品种数量：{len(symbols) - len(failures)}", flush=True)
-    print(f"汇总品种数量：{summary_info['summary_count']}", flush=True)
-    print(f"汇总表：{summary_info['summary_path']}", flush=True)
+    print(f"交易数量：{table_info['trade_count']}", flush=True)
+    print(f"交易表：{table_info['table_path']}", flush=True)
+    print(f"图片目录：{output_dir / 'figures' / 'factors'}", flush=True)
 
     if failures:
-        print(f"\n失败品种数量：{len(failures)}", flush=True)
+        print(f"失败品种数量：{len(failures)}", flush=True)
         for symbol, exc in failures:
             print(f"- {symbol}: {exc}", flush=True)
         raise SystemExit(1)

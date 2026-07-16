@@ -11,16 +11,16 @@ BACKTEST_DIR = Path(__file__).resolve().parent
 CHAPTER_DIR = BACKTEST_DIR.parent
 PROJECT_ROOT = CHAPTER_DIR.parents[1]
 CHAPTER_RESULTS_DIR = PROJECT_ROOT / "results" / "chapter2"
-FACTOR_ID = "21"
-FACTOR_NAME = "high_bias_oi_drop"
+FACTOR_ID = "23"
+FACTOR_NAME = "high_bias_oi_speculation_drop"
 FACTOR_LABEL = f"{FACTOR_ID}_{FACTOR_NAME}"
 DEFAULT_FACTOR_OUTPUT_DIR = (
-    CHAPTER_RESULTS_DIR / "21_high_bias_oi_drop_all_symbols"
+    CHAPTER_RESULTS_DIR / "23_high_bias_oi_speculation_drop_all_symbols"
 )
 DEFAULT_OUTPUT_DIR = (
     CHAPTER_RESULTS_DIR
     / "backtest"
-    / "21_high_bias_oi_drop_simple_interest"
+    / "23_high_bias_oi_speculation_drop_simple_interest"
 )
 TRADING_DAYS_PER_YEAR = 252
 BACKTEST_START_DATE = pd.Timestamp("2021-01-01")
@@ -41,7 +41,7 @@ from matplotlib.ticker import PercentFormatter
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "Backtest factor 21: buy-and-hold benchmark, with reverse-short "
+            "Backtest factor 23: buy-and-hold benchmark, with reverse-short "
             "strategy overlay on factor signals."
         )
     )
@@ -90,7 +90,7 @@ def discover_factor_files(factor_output_dir, symbols=None):
     if not factor_dir.is_dir():
         raise FileNotFoundError(
             f"Factor table directory does not exist: {factor_dir}. "
-            "Run code/chapter2/run/run_21_high_bias_oi_drop_all.py first."
+            "Run code/chapter2/run/run_23_high_bias_oi_speculation_drop_all.py first."
         )
 
     symbol_filter = (
