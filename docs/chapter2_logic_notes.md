@@ -317,20 +317,18 @@ or C_t > low_since_entry_t * (1 + 4 * avg_volatility_rate_10_t)
 
 ## 结果
 
-### 21_high_bias_oi_drop
+| 21 号因子收益汇总 | 22 号因子收益汇总 | 23 号因子收益汇总 |
+| --- | --- | --- |
+| ![21 号因子收益汇总](../useful_plots/all_symbols_21_high_bias_oi_drop_simple_return_summary.png) | ![22 号因子收益汇总](../useful_plots/all_symbols_22_high_bias_oi_drop_hourly_simple_return_summary.png) | ![23 号因子收益汇总](../useful_plots/all_symbols_23_high_bias_oi_speculation_drop_simple_return_summary.png) |
 
-![21 号因子收益汇总](../useful_plots/all_symbols_21_high_bias_oi_drop_simple_return_summary.png)
+### 21_high_bias_oi_drop
 
 ![21 号因子等权净值](../useful_plots/all_symbols_21_high_bias_oi_drop_simple_equal_weight_equity.png)
 
 ### 22_high_bias_oi_drop_hourly
 
-![22 号因子收益汇总](../useful_plots/all_symbols_22_high_bias_oi_drop_hourly_simple_return_summary.png)
-
 ![22 号因子等权净值](../useful_plots/all_symbols_22_high_bias_oi_drop_hourly_simple_equal_weight_equity.png)
 
 ### 23_high_bias_oi_speculation_drop
-
-![23 号因子收益汇总](../useful_plots/all_symbols_23_high_bias_oi_speculation_drop_simple_return_summary.png)
 
 ![23 号因子等权净值](../useful_plots/all_symbols_23_high_bias_oi_speculation_drop_simple_equal_weight_equity.png)
