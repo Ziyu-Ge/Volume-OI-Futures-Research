@@ -1,29 +1,35 @@
-# 21_high_bias_oi_drop 开空和平空逻辑说明
+# chapter2 高乖离持仓回落因子开空和平空逻辑说明
 
-本文档根据 `21_high_bias_oi_drop.py` 中的代码整理，说明该因子的开空、平空条件和主要公式。
+本文档根据 `code/chapter2/factors` 中的 21、22、23 号因子代码整理，说明三个因子的开空、平空条件和主要公式。
 
 ## 一句话理解
 
 这个策略寻找的是：
 
-价格均线仍处在较强的多头排列和高乖离状态，但最近一段时间持仓量和收盘价都在走弱。满足这些条件后，策略在下一交易日开盘开空。
+价格均线仍处在较强的高乖离状态，但最近一段时间持仓量和收盘价都在走弱。21 号是日频基准版本，22 号改成小时级执行，23 号在 21 号基础上增加投机度回落和长期乖离上限过滤。
 
-持有空单后，如果价格涨回开仓价上方，或者从开仓以来低点明显反弹，就在下一交易日开盘平空。
+持有空单后，如果价格涨回开仓价上方，或者从开仓以来低点明显反弹，就在下一根可交易 bar 开盘平空。
 
 ## 关键参数
 
-| 参数 | 代码值 | 含义 |
-| --- | ---: | --- |
-| `MA_SHORT_WINDOW` | 5 | 短期均线窗口 |
-| `MA_LONG_WINDOW` | 20 | 中期均线窗口 |
-| `MA_TREND_WINDOW` | 60 | 长期均线窗口 |
-| `MA_BIAS_SPREAD_THRESHOLD` | 0.04 | 5 日和 20 日相关乖离差阈值 |
-| `MA_LONG_BIAS_SPREAD_THRESHOLD` | 0.10 | 20 日和 60 日相关乖离差阈值 |
-| `REGRESSION_SLOPE_WINDOW` | 7 | 回归斜率窗口，即最近 7 个交易日 |
-| `VOLATILITY_WINDOW` | 10 | 波动率窗口 |
-| `TRAILING_VOLATILITY_MULTIPLIER` | 4 | 追踪止损波动倍数 |
+| 参数 | 代码值 | 适用因子 | 含义 |
+| --- | ---: | --- | --- |
+| `MA_SHORT_WINDOW` | 5 | 21/22/23 | 短期均线窗口 |
+| `MA_LONG_WINDOW` | 20 | 21/22/23 | 中期均线窗口 |
+| `MA_TREND_WINDOW` | 60 | 21/22/23 | 长期均线窗口 |
+| `MA_BIAS_SPREAD_THRESHOLD` | 0.04 | 21/22/23 | 5 日和 20 日相关乖离差阈值 |
+| `MA_LONG_BIAS_SPREAD_THRESHOLD` | 0.10 | 21/22/23 | 20 日和 60 日相关乖离差下限 |
+| `MA_LONG_BIAS_SPREAD_CAP_THRESHOLD` | 0.18 | 23 | 20 日和 60 日相关乖离差上限 |
+| `REGRESSION_SLOPE_WINDOW` | 7 | 21 | 持仓量和收盘价共用的回归斜率窗口 |
+| `OI_REGRESSION_SLOPE_WINDOW` | 15 | 22 | 持仓量回归斜率窗口 |
+| `OI_REGRESSION_SLOPE_WINDOW` | 5 | 23 | 持仓量回归斜率窗口 |
+| `CLOSE_REGRESSION_SLOPE_WINDOW` | 7 | 22/23 | 收盘价回归斜率窗口 |
+| `SPECULATION_REGRESSION_SLOPE_WINDOW` | 5 | 23 | 投机度回归斜率窗口 |
+| `SPECULATION_REGRESSION_SLOPE_THRESHOLD` | -0.01 | 23 | 投机度回归斜率阈值 |
+| `VOLATILITY_WINDOW` | 10 | 21/22/23 | 波动率窗口 |
+| `TRAILING_VOLATILITY_MULTIPLIER` | 4 | 21/22/23 | 追踪止损波动倍数 |
 
-## 开空条件
+## 21_high_bias_oi_drop（日频）开空条件
 
 设第 `t` 日：
 
@@ -215,7 +221,7 @@ position = 0
 
 ## 信号和实际交易的时间关系
 
-代码采用“当天收盘后确认信号，下一交易日开盘执行”的方式：
+21 号和 23 号因子采用“当天收盘后确认信号，下一交易日开盘执行”的方式：
 
 ```text
 actual_open_short_signal_t = open_short_signal_{t-1}
@@ -230,18 +236,113 @@ actual_cover_short_signal_t = cover_short_signal_{t-1}
 - 只有空仓时才会开空。
 - 持有空单时，如果触发平空，平空优先执行。
 
+## 22_high_bias_oi_drop_hourly（小时级）开空条件
+
+22 号因子读取小时数据，但均线、回归斜率和波动率仍按交易日口径计算。每个小时先把当日已发生的小时 bar 累计成一根“截至当前小时”的日 K：
+
+```text
+open_t = 当日第一根小时 bar 开盘价
+close_t = 当前小时收盘价
+high_t = 当日截至当前小时最高价
+low_t = 当日截至当前小时最低价
+OI_t = 当前小时持仓量
+```
+
+当日以前的数据只使用完整交易日，避免引用当前交易日后续小时数据。22 号的开空信号为：
+
+```text
+open_short_signal_t =
+ma_bias_spread_t >= 0.04
+and ma_long_bias_spread_t >= 0.10
+and oi_regression_slope_15_t < 0
+and close_regression_slope_7_t < 0
+```
+
+其中：
+
+```text
+ma_bias_spread_t      = close_ma20_bias_t - close_ma5_bias_t
+ma_long_bias_spread_t = close_ma60_bias_t - close_ma20_bias_t
+```
+
+如果当前小时收盘后生成 `open_short_signal_t = 1`，并且当前为空仓，则在下一小时 bar 开盘开空。
+
+平空逻辑和 21 号一致，但执行频率变为小时级：
+
+```text
+cover_short_signal_t =
+    close_t > entry_price
+or close_t > low_since_entry_t * (1 + 4 * avg_volatility_rate_10_t)
+```
+
+其中 `avg_volatility_rate_10_t` 使用前 10 个完整交易日的 `(high - low) / close` 均值。当前小时收盘触发平空后，下一小时 bar 开盘执行平空。
+
+## 23_high_bias_oi_speculation_drop（日频）开空条件
+
+23 号因子是 21 号的增强版本。它仍然是日频信号、下一交易日开盘执行，但有三处变化：
+
+- 持仓量回归窗口从 7 日改为 5 日。
+- 长中期乖离差增加上限，要求 `ma_long_bias_spread_t <= 0.18`，避免在过度延伸的强趋势中追空。
+- 增加投机度回落条件，要求最近 5 日投机度回归斜率 `<= -0.01`。
+
+开空信号为：
+
+```text
+open_short_signal_t =
+ma_bias_spread_t >= 0.04
+and 0.10 <= ma_long_bias_spread_t <= 0.18
+and oi_regression_slope_5_t < 0
+and close_regression_slope_7_t < 0
+and speculation_regression_slope_5_t <= -0.01
+```
+
+其中投机度斜率计算方式和价格、持仓量斜率一致：
+
+```text
+x = [0, 1, ..., 4]
+y = [speculation_{t-4}, ..., speculation_t]
+y = a + b * x
+speculation_regression_slope_5_t = b
+```
+
+直观理解：23 号不仅要求价格和持仓量同步转弱，还要求投机度出现足够明显的下降，过滤掉只由价格短期回落造成的信号。
+
+平空条件、追踪平空价和 21 号完全一致：
+
+```text
+cover_short_signal_t =
+    C_t > entry_price
+or C_t > low_since_entry_t * (1 + 4 * avg_volatility_rate_10_t)
+```
+
 ## 结果
 
-![结果1](../../../useful_plots/all_symbols_21_high_bias_oi_drop_simple_return_summary.png)
+### 21_high_bias_oi_drop
 
-![结果2](../../../useful_plots/SA_21_high_bias_oi_drop_signal_on_price.png)
+![21 号因子收益汇总](../useful_plots/all_symbols_21_high_bias_oi_drop_simple_return_summary.png)
 
-![结果3](../../../useful_plots/SF_21_high_bias_oi_drop_signal_on_price.png)
+![21 号因子等权净值](../useful_plots/all_symbols_21_high_bias_oi_drop_simple_equal_weight_equity.png)
 
-![结果4](../../../useful_plots/SI_21_high_bias_oi_drop_signal_on_price.png)
+![SA 21 号因子价格信号](../useful_plots/SA_21_high_bias_oi_drop_signal_on_price.png)
 
-![结果5](../../../useful_plots/PG_21_high_bias_oi_drop_signal_on_price.png)
+![SF 21 号因子价格信号](../useful_plots/SF_21_high_bias_oi_drop_signal_on_price.png)
 
-![结果6](../../../useful_plots/V_21_high_bias_oi_drop_signal_on_price.png)
+![SI 21 号因子价格信号](../useful_plots/SI_21_high_bias_oi_drop_signal_on_price.png)
 
-![结果7](../../../useful_plots/EG_21_high_bias_oi_drop_signal_on_price.png)
+![PG 21 号因子价格信号](../useful_plots/PG_21_high_bias_oi_drop_signal_on_price.png)
+
+![V 21 号因子价格信号](../useful_plots/V_21_high_bias_oi_drop_signal_on_price.png)
+
+![EG 21 号因子价格信号](../useful_plots/EG_21_high_bias_oi_drop_signal_on_price.png)
+
+### 22_high_bias_oi_drop_hourly
+
+![22 号因子收益汇总](../useful_plots/all_symbols_22_high_bias_oi_drop_hourly_simple_return_summary.png)
+
+![22 号因子等权净值](../useful_plots/all_symbols_22_high_bias_oi_drop_hourly_simple_equal_weight_equity.png)
+
+### 23_high_bias_oi_speculation_drop
+
+![23 号因子收益汇总](../useful_plots/all_symbols_23_high_bias_oi_speculation_drop_simple_return_summary.png)
+
+![23 号因子等权净值](../useful_plots/all_symbols_23_high_bias_oi_speculation_drop_simple_equal_weight_equity.png)
