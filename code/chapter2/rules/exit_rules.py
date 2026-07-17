@@ -7,6 +7,7 @@ import pandas as pd
 @dataclass(frozen=True)
 class ExitConfig:
     trailing_multiplier: float = 4.0
+    entry_loss_volatility_multiplier: float = 0.0
 
 
 def exit_reason(price_above_entry, trailing_rebound):
@@ -20,9 +21,21 @@ def exit_reason(price_above_entry, trailing_rebound):
 
 
 def check_short_exit(close, entry_price, low_since_entry, avg_volatility_rate, config):
-    """空头平仓规则：亏损回到开仓价上方，或从低点反弹超过波动阈值。"""
+    """空头平仓规则：突破波动调整后的开仓线，或从低点反弹超过阈值。"""
+    entry_loss_stop_price = np.nan
+    if pd.notna(entry_price):
+        if config.entry_loss_volatility_multiplier == 0:
+            entry_loss_stop_price = entry_price
+        elif pd.notna(avg_volatility_rate):
+            entry_loss_stop_price = entry_price * (
+                1
+                + avg_volatility_rate
+                * config.entry_loss_volatility_multiplier
+            )
     price_above_entry = bool(
-        pd.notna(close) and pd.notna(entry_price) and close > entry_price
+        pd.notna(close)
+        and pd.notna(entry_loss_stop_price)
+        and close > entry_loss_stop_price
     )
     trailing_stop_price = np.nan
     trailing_rebound = False
@@ -37,7 +50,7 @@ def check_short_exit(close, entry_price, low_since_entry, avg_volatility_rate, c
         "cover_signal": int(price_above_entry or trailing_rebound),
         "price_above_entry_signal": int(price_above_entry),
         "trailing_rebound_signal": int(trailing_rebound),
+        "entry_loss_stop_price": entry_loss_stop_price,
         "trailing_stop_price": trailing_stop_price,
         "exit_reason": exit_reason(price_above_entry, trailing_rebound),
     }
-

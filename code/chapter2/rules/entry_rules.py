@@ -19,7 +19,9 @@ class EntryConfig:
     ma_long_bias_threshold: float = 0.10
     ma_long_bias_cap: float | None = None
     oi_slope_window: int = 7
+    oi_slope_threshold: float = 0.0
     close_slope_window: int = 7
+    close_slope_threshold: float = 0.0
     speculation_slope_window: int = 5
     speculation_slope_threshold: float = -0.01
     volatility_window: int = 10
@@ -40,6 +42,12 @@ def add_entry_signals(daily, config, use_speculation=False):
     ).astype(int)
     data["ma_long_bias_spread_signal"] = (
         data["ma_long_bias_spread"] >= config.ma_long_bias_threshold
+    ).astype(int)
+    data["oi_slope_signal"] = (
+        data["oi_slope_rate"] <= config.oi_slope_threshold
+    ).astype(int)
+    data["close_slope_signal"] = (
+        data["close_slope_rate"] <= config.close_slope_threshold
     ).astype(int)
     if config.ma_long_bias_cap is None:
         data["ma_long_bias_spread_cap_signal"] = 1
@@ -66,8 +74,8 @@ def add_entry_signals(daily, config, use_speculation=False):
         (data["ma_bias_spread_signal"] == 1)
         & (data["ma_long_bias_spread_signal"] == 1)
         & (data["ma_long_bias_spread_cap_signal"] == 1)
-        & (data["oi_slope_down"] == 1)
-        & (data["close_slope_down"] == 1)
+        & (data["oi_slope_signal"] == 1)
+        & (data["close_slope_signal"] == 1)
         & (data["speculation_slope_signal"] == 1)
     ).astype(int)
 
@@ -80,4 +88,3 @@ def add_entry_signals(daily, config, use_speculation=False):
         + speculation_score
     )
     return data
-

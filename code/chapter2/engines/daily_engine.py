@@ -76,6 +76,7 @@ def _empty_result(position, entry_price, low_since_entry):
         "cover_signal": 0,
         "price_above_entry_signal": 0,
         "trailing_rebound_signal": 0,
+        "entry_loss_stop_price": np.nan,
         "trailing_stop_price": np.nan,
     }
 
@@ -109,4 +110,3 @@ def _attach_results(frame, rows):
     result["short_exit_signal"] = (result["trade_signal"] == 1).astype(int)
     result["signal"] = result["short_entry_signal"]
     return result
-
