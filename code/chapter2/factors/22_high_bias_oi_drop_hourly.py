@@ -34,10 +34,11 @@ MA_LONG_WINDOW = 20
 MA_TREND_WINDOW = 60
 MA_BIAS_SPREAD_THRESHOLD = 0.04
 MA_LONG_BIAS_SPREAD_THRESHOLD = 0.10
+MA_LONG_BIAS_SPREAD_CAP_THRESHOLD = 0.18
 OI_REGRESSION_SLOPE_WINDOW = 15
 CLOSE_REGRESSION_SLOPE_WINDOW = 7
 VOLATILITY_WINDOW = 10
-TRAILING_VOLATILITY_MULTIPLIER = 4
+TRAILING_VOLATILITY_MULTIPLIER = 3.5
 
 OI_REGRESSION_SLOPE_DOWN_COLUMN = (
     f"oi_regression_slope_down_{OI_REGRESSION_SLOPE_WINDOW}"
@@ -57,13 +58,14 @@ CLOSE_REGRESSION_SLOPE_DOWN_COLUMN = (
 # 初始状态为空仓。每个小时收盘后确认一次信号，下一小时 bar 开盘执行。
 #
 # 开空：
-# 1. ma20 乖离率 - ma5 乖离率 >= 4%，且 ma60 乖离率 - ma20 乖离率 >= 10%；
-# 2. 最近 OI_REGRESSION_SLOPE_WINDOW 个交易日持仓量做回归线，斜率小于 0；
-# 3. 最近 CLOSE_REGRESSION_SLOPE_WINDOW 个交易日收盘价做回归线，斜率小于 0。
+# 1. ma20 乖离率 - ma5 乖离率 >= 4%；
+# 2. ma60 乖离率 - ma20 乖离率在 [10%, 18%] 内，避免追空过度延伸；
+# 3. 最近 OI_REGRESSION_SLOPE_WINDOW 个交易日持仓量做回归线，斜率小于 0；
+# 4. 最近 CLOSE_REGRESSION_SLOPE_WINDOW 个交易日收盘价做回归线，斜率小于 0。
 #
 # 平空：
 # 1. 收盘价高于开仓价；
-# 2. 收盘价高于“开仓以来最低价 + 4 倍历史 10 日平均波动”。
+# 2. 收盘价高于“开仓以来最低价 + 3.5 倍历史 10 日平均波动”。
 #
 # 两个平空条件任一触发，都会在下一小时 bar 开盘执行平空。历史 10 日平均
 # 波动使用前 10 日 high-low 相对 close 的比例均值，转换成开仓以来最低价
@@ -202,6 +204,20 @@ def map_daily_series(daily, series):
     return daily["trading_date"].map(series)
 
 
+def linear_regression_slope(values):
+    values = np.asarray(values, dtype=float)
+    if np.isnan(values).any():
+        return np.nan
+
+    x = np.arange(len(values), dtype=float)
+    x = x - x.mean()
+    denominator = np.square(x).sum()
+    if denominator == 0:
+        return np.nan
+
+    return np.dot(x, values - values.mean()) / denominator
+
+
 def add_daily_rolling_mean(daily, full_daily, source_column, output_column, window):
     if window <= 1:
         daily[output_column] = daily[source_column]
@@ -256,6 +272,68 @@ def add_daily_regression_down_signal(
     daily[output_column] = (slope < 0).astype(int)
 
 
+def build_complete_daily_entry_signal(full_daily):
+    entry_daily = full_daily.copy()
+
+    entry_daily["entry_ma5"] = (
+        entry_daily["close"]
+        .rolling(window=MA_SHORT_WINDOW, min_periods=MA_SHORT_WINDOW)
+        .mean()
+    )
+    entry_daily["entry_ma20"] = (
+        entry_daily["close"]
+        .rolling(window=MA_LONG_WINDOW, min_periods=MA_LONG_WINDOW)
+        .mean()
+    )
+    entry_daily["entry_ma60"] = (
+        entry_daily["close"]
+        .rolling(window=MA_TREND_WINDOW, min_periods=MA_TREND_WINDOW)
+        .mean()
+    )
+
+    entry_close_ma5_bias = entry_daily["close"] / entry_daily["entry_ma5"] - 1
+    entry_close_ma20_bias = entry_daily["close"] / entry_daily["entry_ma20"] - 1
+    entry_close_ma60_bias = entry_daily["close"] / entry_daily["entry_ma60"] - 1
+    entry_ma_bias_spread = entry_close_ma20_bias - entry_close_ma5_bias
+    entry_ma_long_bias_spread = entry_close_ma60_bias - entry_close_ma20_bias
+    entry_ma_bias_spread_signal = entry_ma_bias_spread >= MA_BIAS_SPREAD_THRESHOLD
+    entry_ma_long_bias_spread_signal = (
+        entry_ma_long_bias_spread >= MA_LONG_BIAS_SPREAD_THRESHOLD
+    )
+    entry_ma_long_bias_spread_cap_signal = (
+        entry_ma_long_bias_spread <= MA_LONG_BIAS_SPREAD_CAP_THRESHOLD
+    )
+
+    entry_oi_slope_down = (
+        entry_daily["open_interest"]
+        .rolling(
+            window=OI_REGRESSION_SLOPE_WINDOW,
+            min_periods=OI_REGRESSION_SLOPE_WINDOW,
+        )
+        .apply(linear_regression_slope, raw=True)
+        < 0
+    )
+    entry_close_slope_down = (
+        entry_daily["close"]
+        .rolling(
+            window=CLOSE_REGRESSION_SLOPE_WINDOW,
+            min_periods=CLOSE_REGRESSION_SLOPE_WINDOW,
+        )
+        .apply(linear_regression_slope, raw=True)
+        < 0
+    )
+
+    entry_daily["complete_daily_open_short_signal"] = (
+        entry_ma_bias_spread_signal
+        & entry_ma_long_bias_spread_signal
+        & entry_ma_long_bias_spread_cap_signal
+        & entry_oi_slope_down
+        & entry_close_slope_down
+    ).astype(int)
+
+    return entry_daily["complete_daily_open_short_signal"]
+
+
 def add_daily_frequency_features(daily):
     daily = daily.copy()
     full_daily = build_full_daily_bars(daily)
@@ -276,16 +354,21 @@ def add_daily_frequency_features(daily):
     # 中短期乖离差：
     # close_ma20_bias - close_ma5_bias >= 4%。
     # 当价格相对 ma5 更弱、相对 ma20 没那么弱时，说明短期下跌更急。
-    ma_bias_spread_signal = (
-        close_ma20_bias - close_ma5_bias >= MA_BIAS_SPREAD_THRESHOLD
-    )
+    daily["ma_bias_spread"] = close_ma20_bias - close_ma5_bias
+    daily["ma_bias_spread_signal"] = (
+        daily["ma_bias_spread"] >= MA_BIAS_SPREAD_THRESHOLD
+    ).astype(int)
 
     # 长中期乖离差：
-    # close_ma60_bias - close_ma20_bias >= 10%。
-    # 用来确认价格相对中期均线的下跌也足够明显，不只是短线波动。
-    ma_long_bias_spread_signal = (
-        close_ma60_bias - close_ma20_bias >= MA_LONG_BIAS_SPREAD_THRESHOLD
-    )
+    # close_ma60_bias - close_ma20_bias 在 [10%, 18%]。
+    # 下限确认中期下跌足够明显，上限过滤过度延伸后的追空。
+    daily["ma_long_bias_spread"] = close_ma60_bias - close_ma20_bias
+    daily["ma_long_bias_spread_signal"] = (
+        daily["ma_long_bias_spread"] >= MA_LONG_BIAS_SPREAD_THRESHOLD
+    ).astype(int)
+    daily["ma_long_bias_spread_cap_signal"] = (
+        daily["ma_long_bias_spread"] <= MA_LONG_BIAS_SPREAD_CAP_THRESHOLD
+    ).astype(int)
 
     # 持仓量回归斜率小于 0：持仓量趋势在下降。
     add_daily_regression_down_signal(
@@ -323,14 +406,30 @@ def add_daily_frequency_features(daily):
         avg_volatility_rate,
     )
 
+    # 小时合成日频开仓信号保留为诊断列；真实开仓只使用完整日频信号。
     # 开空信号四个条件同时满足：
     # 1. 中短期乖离差达标；2. 长中期乖离差达标；
     # 3. 持仓量回归斜率向下；4. 价格回归斜率向下。
-    daily["open_short_signal"] = (
-        ma_bias_spread_signal
-        & ma_long_bias_spread_signal
+    daily["intraday_open_short_signal"] = (
+        (daily["ma_bias_spread_signal"] == 1)
+        & (daily["ma_long_bias_spread_signal"] == 1)
+        & (daily["ma_long_bias_spread_cap_signal"] == 1)
         & (daily[OI_REGRESSION_SLOPE_DOWN_COLUMN] == 1)
         & (daily[CLOSE_REGRESSION_SLOPE_DOWN_COLUMN] == 1)
+    ).astype(int)
+
+    complete_entry_signal = build_complete_daily_entry_signal(full_daily)
+    daily["complete_daily_open_short_signal"] = (
+        map_daily_series(daily, complete_entry_signal).fillna(0).astype(int)
+    )
+    daily["is_complete_daily_bar"] = (
+        daily["trading_date"] != daily["trading_date"].shift(-1)
+    ).astype(int)
+    # 完整日频开仓信号只能在当日最后一根小时 bar 收盘后确认，
+    # 状态机会在下一小时 bar 开盘执行。
+    daily["open_short_signal"] = (
+        (daily["is_complete_daily_bar"] == 1)
+        & (daily["complete_daily_open_short_signal"] == 1)
     ).astype(int)
 
     return daily

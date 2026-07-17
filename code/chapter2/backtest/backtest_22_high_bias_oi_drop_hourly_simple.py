@@ -23,8 +23,9 @@ DEFAULT_OUTPUT_DIR = (
 )
 BACKTEST_START_DATE = pd.Timestamp("2021-01-01")
 BACKTEST_END_DATE = pd.Timestamp("2026-12-31")
-TRADING_BARS_PER_YEAR = 252 * 5
 TRADING_DAYS_PER_YEAR = 252
+DEFAULT_TRADING_BARS_PER_DAY = 9
+TRADING_BARS_PER_YEAR = TRADING_DAYS_PER_YEAR * DEFAULT_TRADING_BARS_PER_DAY
 
 os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(PROJECT_ROOT / ".cache"))
@@ -138,8 +139,16 @@ def annualized_return(
     return total_return / period_count * periods_per_year
 
 
+def infer_trading_bars_per_year(frame):
+    trading_days = frame["trading_date"].nunique()
+    if trading_days <= 0:
+        return TRADING_BARS_PER_YEAR
+    return TRADING_DAYS_PER_YEAR * len(frame) / trading_days
+
+
 def summarize(frame, trades):
     closed = trades[trades["status"] == "closed"]
+    bars_per_year = infer_trading_bars_per_year(frame)
     strategy_total_return = frame["strategy_cumulative_return"].iloc[-1]
     benchmark_total_return = frame["benchmark_cumulative_return"].iloc[-1]
     excess_total_return = frame["excess_cumulative_return"].iloc[-1]
@@ -149,6 +158,7 @@ def summarize(frame, trades):
         "end_date": frame["date"].max(),
         "total_bars": len(frame),
         "trading_days": frame["trading_date"].nunique(),
+        "bars_per_year": bars_per_year,
         "signal_count": int(frame["open_short_signal"].sum()),
         "entry_count": int((frame["trade_signal"] == -1).sum()),
         "exit_count": int((frame["trade_signal"] == 1).sum()),
@@ -158,22 +168,34 @@ def summarize(frame, trades):
         "strategy_annual_return": annualized_return(
             strategy_total_return,
             len(frame),
+            bars_per_year,
         ),
         "benchmark_total_return": benchmark_total_return,
         "benchmark_annual_return": annualized_return(
             benchmark_total_return,
             len(frame),
+            bars_per_year,
         ),
         "excess_total_return": excess_total_return,
         "excess_annual_return": annualized_return(
             excess_total_return,
             len(frame),
+            bars_per_year,
         ),
         "strategy_max_drawdown": frame["strategy_drawdown"].min(),
         "benchmark_max_drawdown": frame["benchmark_drawdown"].min(),
-        "strategy_sharpe": annualized_sharpe(frame["strategy_return"]),
-        "benchmark_sharpe": annualized_sharpe(frame["benchmark_return"]),
-        "excess_sharpe": annualized_sharpe(frame["excess_return"]),
+        "strategy_sharpe": annualized_sharpe(
+            frame["strategy_return"],
+            bars_per_year,
+        ),
+        "benchmark_sharpe": annualized_sharpe(
+            frame["benchmark_return"],
+            bars_per_year,
+        ),
+        "excess_sharpe": annualized_sharpe(
+            frame["excess_return"],
+            bars_per_year,
+        ),
         "trade_count": len(trades),
         "closed_trade_count": len(closed),
         "mean_trade_return": closed["trade_return"].mean(),
@@ -386,6 +408,7 @@ def summarize_portfolio(portfolio, summaries, trades):
         "end_date": portfolio["date"].max(),
         "total_bars": len(portfolio),
         "trading_days": portfolio["trading_date"].nunique(),
+        "bars_per_year": TRADING_DAYS_PER_YEAR,
         "symbol_count": summaries["symbol"].nunique(),
         "mean_bar_symbol_count": portfolio["symbol_count"].mean(),
         "mean_daily_symbol_count": portfolio["symbol_count"].mean(),

@@ -14,6 +14,7 @@ CHAPTER_RESULTS_DIR = PROJECT_ROOT / "results" / "chapter2"
 FACTOR_ID = "23"
 FACTOR_NAME = "high_bias_oi_speculation_drop"
 FACTOR_LABEL = f"{FACTOR_ID}_{FACTOR_NAME}"
+DEFAULT_HOURLY_DIR = CHAPTER_RESULTS_DIR / "tables" / "hourly"
 DEFAULT_FACTOR_OUTPUT_DIR = (
     CHAPTER_RESULTS_DIR / "23_high_bias_oi_speculation_drop_all_symbols"
 )
@@ -25,6 +26,8 @@ DEFAULT_OUTPUT_DIR = (
 TRADING_DAYS_PER_YEAR = 252
 BACKTEST_START_DATE = pd.Timestamp("2021-01-01")
 BACKTEST_END_DATE = pd.Timestamp("2026-12-31")
+VOLATILITY_WINDOW = 10
+TRAILING_VOLATILITY_MULTIPLIER = 4
 
 os.environ.setdefault("MPLCONFIGDIR", str(PROJECT_ROOT / ".matplotlib"))
 os.environ.setdefault("XDG_CACHE_HOME", str(PROJECT_ROOT / ".cache"))
@@ -50,6 +53,15 @@ def parse_args():
         type=Path,
         default=DEFAULT_FACTOR_OUTPUT_DIR,
         help=f"Factor output directory. Default: {DEFAULT_FACTOR_OUTPUT_DIR}",
+    )
+    parser.add_argument(
+        "--hourly-dir",
+        type=Path,
+        default=DEFAULT_HOURLY_DIR,
+        help=(
+            "Hourly cache directory for intraday exits. "
+            f"Default: {DEFAULT_HOURLY_DIR}"
+        ),
     )
     parser.add_argument(
         "--output-dir",
@@ -121,7 +133,7 @@ def discover_factor_files(factor_output_dir, symbols=None):
 
 def load_factor_daily(file_info):
     daily = pd.read_csv(file_info["path"])
-    required_columns = {"date", "open", "close", "position"}
+    required_columns = {"date", "open_short_signal"}
     missing_columns = required_columns - set(daily.columns)
     if missing_columns:
         raise ValueError(
@@ -133,81 +145,12 @@ def load_factor_daily(file_info):
     daily = daily.sort_values("date").reset_index(drop=True)
     daily = filter_backtest_window(daily, file_info)
     daily["symbol"] = file_info["symbol"]
-    daily["open"] = pd.to_numeric(daily["open"], errors="coerce")
-    daily["close"] = pd.to_numeric(daily["close"], errors="coerce")
-    daily["position"] = (
-        pd.to_numeric(daily["position"], errors="coerce")
+
+    daily["open_short_signal"] = (
+        pd.to_numeric(daily["open_short_signal"], errors="coerce")
         .fillna(0)
         .astype(int)
     )
-
-    if "daily_return" in daily.columns:
-        daily["daily_return"] = pd.to_numeric(
-            daily["daily_return"],
-            errors="coerce",
-        )
-    else:
-        daily["daily_return"] = daily["close"].pct_change()
-    daily.loc[daily.index[0], "daily_return"] = np.nan
-
-    if "overnight_return" in daily.columns:
-        daily["overnight_return"] = pd.to_numeric(
-            daily["overnight_return"],
-            errors="coerce",
-        )
-    else:
-        daily["overnight_return"] = (
-            daily["open"] / daily["close"].shift(1).replace(0, np.nan) - 1
-        )
-    daily.loc[daily.index[0], "overnight_return"] = np.nan
-
-    if "intraday_return" in daily.columns:
-        daily["intraday_return"] = pd.to_numeric(
-            daily["intraday_return"],
-            errors="coerce",
-        )
-    else:
-        daily["intraday_return"] = (
-            daily["close"] / daily["open"].replace(0, np.nan) - 1
-        )
-
-    daily["benchmark_position"] = 1
-    daily["benchmark_daily_return"] = daily["daily_return"].fillna(0)
-    add_simple_curve_columns(daily, "benchmark_daily_return", "benchmark")
-
-    daily["previous_close_position"] = (
-        daily["position"].shift(1).fillna(0).astype(int)
-    )
-    daily["effective_position"] = daily["position"]
-    daily["reverse_short_position"] = daily["effective_position"]
-    daily["strategy_net_position"] = 1 + 2 * daily["reverse_short_position"]
-    daily["short_overlay_daily_return"] = (
-        2
-        * (
-            daily["previous_close_position"]
-            * daily["overnight_return"].fillna(0)
-            + daily["reverse_short_position"]
-            * daily["intraday_return"].fillna(0)
-        )
-    )
-    add_simple_curve_columns(
-        daily,
-        "short_overlay_daily_return",
-        "short_overlay",
-    )
-    daily["simple_daily_return"] = (
-        daily["benchmark_daily_return"] + daily["short_overlay_daily_return"]
-    )
-    add_simple_curve_columns(daily, "simple_daily_return", "simple")
-    add_strategy_alias_columns(daily)
-    daily["excess_daily_return"] = (
-        daily["simple_daily_return"] - daily["benchmark_daily_return"]
-    )
-    daily["excess_cumulative_return"] = (
-        daily["simple_cumulative_return"]
-        - daily["benchmark_cumulative_return"]
-    )
-
     return daily
 
 
@@ -219,6 +162,377 @@ def filter_backtest_window(daily, file_info):
             f"{file_info['symbol']} has no rows between "
             f"{BACKTEST_START_DATE.date()} and {BACKTEST_END_DATE.date()}"
         )
+    return daily
+
+
+def load_hourly(symbol, hourly_dir):
+    hourly_path = hourly_dir / f"{symbol}_hourly.csv"
+    if not hourly_path.exists():
+        raise FileNotFoundError(f"Hourly data not found for {symbol}: {hourly_path}")
+
+    hourly = pd.read_csv(hourly_path)
+    required_columns = {
+        "date",
+        "trading_date",
+        "open",
+        "close",
+        "high",
+        "low",
+    }
+    missing_columns = required_columns - set(hourly.columns)
+    if missing_columns:
+        raise ValueError(
+            f"{hourly_path} missing columns: {','.join(sorted(missing_columns))}"
+        )
+
+    hourly["date"] = pd.to_datetime(hourly["date"])
+    hourly["trading_date"] = pd.to_datetime(hourly["trading_date"])
+    for column in ["open", "close", "high", "low"]:
+        hourly[column] = pd.to_numeric(hourly[column], errors="coerce")
+
+    return hourly.sort_values(["trading_date", "date"]).reset_index(drop=True)
+
+
+def build_intraday_daily_bars(hourly):
+    bars = hourly.sort_values(["trading_date", "date"]).reset_index(drop=True)
+    grouped = bars.groupby("trading_date", sort=False)
+
+    return pd.DataFrame(
+        {
+            "date": bars["date"],
+            "trading_date": bars["trading_date"],
+            "hourly_open": bars["open"],
+            "hourly_low": bars["low"],
+            "open": grouped["open"].transform("first"),
+            "close": bars["close"],
+            "high": grouped["high"].cummax(),
+            "low": grouped["low"].cummin(),
+        }
+    )
+
+
+def add_hourly_exit_features(frame):
+    full_daily = (
+        frame.groupby("trading_date", sort=False)
+        .tail(1)
+        .copy()
+        .set_index("trading_date", drop=False)
+    )
+    price_range_rate = (
+        (full_daily["high"] - full_daily["low"])
+        / full_daily["close"].replace(0, np.nan)
+    )
+    avg_volatility_rate = (
+        price_range_rate.shift(1)
+        .rolling(window=VOLATILITY_WINDOW, min_periods=VOLATILITY_WINDOW)
+        .mean()
+    )
+    frame["avg_volatility_rate_10"] = frame["trading_date"].map(
+        avg_volatility_rate
+    )
+    return frame
+
+
+def exit_reason_from_signals(price_above_entry_signal, trailing_rebound_signal):
+    if price_above_entry_signal and trailing_rebound_signal:
+        return "price_above_entry_and_trailing_rebound"
+    if price_above_entry_signal:
+        return "price_above_entry"
+    if trailing_rebound_signal:
+        return "trailing_rebound"
+    return ""
+
+
+def attach_complete_daily_entry_signal(frame, factor_daily):
+    signal_by_date = factor_daily.set_index("date")["open_short_signal"]
+    frame["complete_daily_open_short_signal"] = (
+        frame["trading_date"].map(signal_by_date).fillna(0).astype(int)
+    )
+    frame["is_complete_daily_bar"] = (
+        frame["trading_date"] != frame["trading_date"].shift(-1)
+    ).astype(int)
+    frame["open_short_signal"] = (
+        (frame["is_complete_daily_bar"] == 1)
+        & (frame["complete_daily_open_short_signal"] == 1)
+    ).astype(int)
+    frame["signal"] = frame["open_short_signal"]
+    return frame
+
+
+def build_mixed_hourly_state_machine(frame):
+    hourly = frame.copy()
+
+    position = 0
+    entry_price = np.nan
+    low_since_entry = np.nan
+    pending_open = False
+    pending_cover = False
+    pending_exit_reason = ""
+
+    positions = []
+    trade_signals = []
+    trade_actions = []
+    entry_prices = []
+    exit_prices = []
+    exit_reasons = []
+    low_since_entry_values = []
+    trailing_stop_distances = []
+    trailing_stop_prices = []
+    price_above_entry_signals = []
+    trailing_rebound_signals = []
+    cover_short_signals = []
+    cover_signal_reasons = []
+
+    for _, row in hourly.iterrows():
+        open_price = row["hourly_open"]
+        close = row["close"]
+        low = row["hourly_low"]
+        avg_volatility_rate = row["avg_volatility_rate_10"]
+
+        actual_open_signal = pending_open
+        actual_cover_signal = pending_cover
+        actual_exit_reason = pending_exit_reason
+        pending_open = False
+        pending_cover = False
+        pending_exit_reason = ""
+
+        trade_signal = 0
+        trade_action = ""
+        exit_reason = ""
+        row_entry_price = entry_price if position == -1 else np.nan
+        row_exit_price = np.nan
+        opened_this_bar = False
+
+        if position == -1 and actual_cover_signal and pd.notna(open_price):
+            trade_signal = 1
+            trade_action = "cover_short"
+            exit_reason = actual_exit_reason or "cover_short"
+            row_entry_price = entry_price
+            row_exit_price = open_price
+            position = 0
+            entry_price = np.nan
+            low_since_entry = np.nan
+        elif position == 0 and actual_open_signal and pd.notna(open_price):
+            trade_signal = -1
+            trade_action = "open_short"
+            entry_price = open_price
+            low_since_entry = open_price
+            row_entry_price = entry_price
+            position = -1
+            opened_this_bar = True
+
+        price_above_entry_signal = 0
+        trailing_rebound_signal = 0
+        cover_short_signal = 0
+        cover_signal_reason = ""
+        trailing_stop_distance = np.nan
+        trailing_stop_price = np.nan
+        row_low_since_entry = low_since_entry if position == -1 else np.nan
+
+        if position == -1:
+            low_candidate = low
+            if pd.isna(low_candidate):
+                low_candidate = open_price if opened_this_bar else close
+            if pd.notna(low_candidate):
+                low_since_entry = min(low_since_entry, low_candidate)
+
+            row_entry_price = entry_price
+            row_low_since_entry = low_since_entry
+            price_above_entry_signal = int(
+                pd.notna(close)
+                and pd.notna(entry_price)
+                and close > entry_price
+            )
+
+            if (
+                pd.notna(close)
+                and pd.notna(low_since_entry)
+                and pd.notna(avg_volatility_rate)
+            ):
+                trailing_stop_distance = (
+                    low_since_entry
+                    * avg_volatility_rate
+                    * TRAILING_VOLATILITY_MULTIPLIER
+                )
+                trailing_stop_price = low_since_entry + trailing_stop_distance
+                trailing_rebound_signal = int(close > trailing_stop_price)
+
+            cover_short_signal = int(
+                price_above_entry_signal or trailing_rebound_signal
+            )
+            cover_signal_reason = exit_reason_from_signals(
+                price_above_entry_signal,
+                trailing_rebound_signal,
+            )
+
+        pending_open = bool(row["open_short_signal"])
+        pending_cover = bool(cover_short_signal)
+        pending_exit_reason = cover_signal_reason
+
+        positions.append(position)
+        trade_signals.append(trade_signal)
+        trade_actions.append(trade_action)
+        entry_prices.append(row_entry_price)
+        exit_prices.append(row_exit_price)
+        exit_reasons.append(exit_reason)
+        low_since_entry_values.append(row_low_since_entry)
+        trailing_stop_distances.append(trailing_stop_distance)
+        trailing_stop_prices.append(trailing_stop_price)
+        price_above_entry_signals.append(price_above_entry_signal)
+        trailing_rebound_signals.append(trailing_rebound_signal)
+        cover_short_signals.append(cover_short_signal)
+        cover_signal_reasons.append(cover_signal_reason)
+
+    hourly["position"] = positions
+    hourly["trade_signal"] = trade_signals
+    hourly["trade_action"] = trade_actions
+    hourly["entry_price"] = entry_prices
+    hourly["exit_price"] = exit_prices
+    hourly["exit_reason"] = exit_reasons
+    hourly["low_since_entry"] = low_since_entry_values
+    hourly["trailing_stop_distance"] = trailing_stop_distances
+    hourly["trailing_stop_price"] = trailing_stop_prices
+    hourly["price_above_entry_signal"] = price_above_entry_signals
+    hourly["trailing_rebound_signal"] = trailing_rebound_signals
+    hourly["cover_short_signal"] = cover_short_signals
+    hourly["cover_signal_reason"] = cover_signal_reasons
+    hourly["short_entry_signal"] = (hourly["trade_signal"] == -1).astype(int)
+    hourly["short_exit_signal"] = (hourly["trade_signal"] == 1).astype(int)
+    return hourly
+
+
+def add_hourly_return_columns(hourly):
+    bar_open = hourly["hourly_open"].replace(0, np.nan)
+    previous_close = hourly["close"].shift(1).replace(0, np.nan)
+    previous_position = hourly["position"].shift(1).fillna(0)
+
+    hourly["overnight_return"] = (bar_open / previous_close - 1).fillna(0)
+    hourly["intraday_return"] = (hourly["close"] / bar_open - 1).fillna(0)
+    if not hourly.empty:
+        hourly.loc[hourly.index[0], "overnight_return"] = 0
+        hourly.loc[hourly.index[0], "intraday_return"] = 0
+
+    hourly["benchmark_daily_return"] = (
+        hourly["overnight_return"] + hourly["intraday_return"]
+    )
+    hourly["short_overlay_daily_return"] = 2 * (
+        previous_position * hourly["overnight_return"]
+        + hourly["position"] * hourly["intraday_return"]
+    )
+    hourly["simple_daily_return"] = (
+        hourly["benchmark_daily_return"] + hourly["short_overlay_daily_return"]
+    )
+    hourly["excess_daily_return"] = (
+        hourly["simple_daily_return"] - hourly["benchmark_daily_return"]
+    )
+    hourly["strategy_net_position"] = 1 + 2 * hourly["position"]
+    hourly["previous_close_position"] = previous_position.astype(int)
+    return hourly
+
+
+def prepare_hourly_backtest_frame(file_info, factor_daily, hourly_dir):
+    symbol = file_info["symbol"]
+    hourly = load_hourly(symbol, hourly_dir)
+    hourly = hourly[
+        hourly["trading_date"].between(BACKTEST_START_DATE, BACKTEST_END_DATE)
+    ].copy()
+    if hourly.empty:
+        raise ValueError(f"{symbol} has no hourly rows in backtest date window.")
+
+    frame = build_intraday_daily_bars(hourly)
+    frame = attach_complete_daily_entry_signal(frame, factor_daily)
+    frame = add_hourly_exit_features(frame)
+    frame = build_mixed_hourly_state_machine(frame)
+    frame = add_hourly_return_columns(frame)
+    frame.insert(0, "symbol", symbol)
+    return frame
+
+
+def first_non_na(values):
+    valid = values.dropna()
+    return valid.iloc[0] if not valid.empty else np.nan
+
+
+def last_non_na(values):
+    valid = values.dropna()
+    return valid.iloc[-1] if not valid.empty else np.nan
+
+
+def last_non_empty(values):
+    valid = values.dropna().astype(str)
+    valid = valid[valid != ""]
+    return valid.iloc[-1] if not valid.empty else ""
+
+
+def aggregate_hourly_to_daily(hourly):
+    daily = (
+        hourly.groupby("trading_date", sort=False)
+        .agg(
+            symbol=("symbol", "first"),
+            date=("trading_date", "first"),
+            open=("hourly_open", "first"),
+            close=("close", "last"),
+            high=("high", "last"),
+            low=("low", "last"),
+            open_short_signal=("open_short_signal", "sum"),
+            complete_daily_open_short_signal=(
+                "complete_daily_open_short_signal",
+                "last",
+            ),
+            signal=("signal", "sum"),
+            cover_short_signal=("cover_short_signal", "sum"),
+            price_above_entry_signal=("price_above_entry_signal", "sum"),
+            trailing_rebound_signal=("trailing_rebound_signal", "sum"),
+            short_entry_signal=("short_entry_signal", "sum"),
+            short_exit_signal=("short_exit_signal", "sum"),
+            trade_signal=("trade_signal", "sum"),
+            entry_price=("entry_price", first_non_na),
+            exit_price=("exit_price", first_non_na),
+            exit_reason=("exit_reason", last_non_empty),
+            position=("position", "last"),
+            reverse_short_position=(
+                "position",
+                lambda values: int((values == -1).any()) * -1,
+            ),
+            strategy_net_position=("strategy_net_position", "mean"),
+            benchmark_daily_return=("benchmark_daily_return", "sum"),
+            short_overlay_daily_return=("short_overlay_daily_return", "sum"),
+            simple_daily_return=("simple_daily_return", "sum"),
+            excess_daily_return=("excess_daily_return", "sum"),
+            avg_volatility_rate_10=("avg_volatility_rate_10", "last"),
+            low_since_entry=("low_since_entry", last_non_na),
+            trailing_stop_distance=("trailing_stop_distance", last_non_na),
+            trailing_stop_price=("trailing_stop_price", last_non_na),
+            hourly_bar_count=("date", "size"),
+        )
+        .reset_index(drop=True)
+        .sort_values("date")
+    )
+    daily["daily_return"] = daily["benchmark_daily_return"]
+    daily["overnight_return"] = np.nan
+    daily["intraday_return"] = np.nan
+    daily["benchmark_position"] = 1
+    daily["previous_close_position"] = (
+        daily["position"].shift(1).fillna(0).astype(int)
+    )
+    daily["effective_position"] = daily["reverse_short_position"]
+    daily["trade_signal"] = np.select(
+        [
+            (daily["short_entry_signal"] > 0) & (daily["short_exit_signal"] == 0),
+            (daily["short_exit_signal"] > 0) & (daily["short_entry_signal"] == 0),
+        ],
+        [-1, 1],
+        default=0,
+    )
+
+    add_simple_curve_columns(daily, "benchmark_daily_return", "benchmark")
+    add_simple_curve_columns(daily, "short_overlay_daily_return", "short_overlay")
+    add_simple_curve_columns(daily, "simple_daily_return", "simple")
+    add_strategy_alias_columns(daily)
+    daily["excess_cumulative_return"] = (
+        daily["simple_cumulative_return"]
+        - daily["benchmark_cumulative_return"]
+    )
     return daily
 
 
@@ -279,6 +593,22 @@ def summarize_daily(daily, symbol):
         .fillna(0)
         .astype(int)
     )
+    short_entry_signal = (
+        pd.to_numeric(
+            daily.get("short_entry_signal", trade_signal == -1),
+            errors="coerce",
+        )
+        .fillna(0)
+        .astype(int)
+    )
+    short_exit_signal = (
+        pd.to_numeric(
+            daily.get("short_exit_signal", trade_signal == 1),
+            errors="coerce",
+        )
+        .fillna(0)
+        .astype(int)
+    )
     signal = (
         pd.to_numeric(daily.get("signal", 0), errors="coerce")
         .fillna(0)
@@ -299,8 +629,8 @@ def summarize_daily(daily, symbol):
         "holding_days": int(reverse_short_mask.sum()),
         "holding_ratio": safe_ratio(int(reverse_short_mask.sum()), len(daily)),
         "signal_days": int(signal.sum()),
-        "entry_count": int((trade_signal == -1).sum()),
-        "exit_count": int((trade_signal == 1).sum()),
+        "entry_count": int(short_entry_signal.sum()),
+        "exit_count": int(short_exit_signal.sum()),
         "final_position": final_short_position,
         "final_short_position": final_short_position,
         "final_strategy_net_position": 1 + 2 * final_short_position,
@@ -933,10 +1263,12 @@ def save_combined_outputs(
     }
 
 
-def run_backtest(file_info, output_dir):
+def run_backtest(file_info, hourly_dir, output_dir):
     symbol = file_info["symbol"]
-    daily = load_factor_daily(file_info)
-    trades = build_trade_table(daily, symbol)
+    factor_daily = load_factor_daily(file_info)
+    hourly = prepare_hourly_backtest_frame(file_info, factor_daily, hourly_dir)
+    daily = aggregate_hourly_to_daily(hourly)
+    trades = build_trade_table(hourly, symbol)
     summary = summarize_daily(daily, symbol)
     summary = add_trade_summary(summary, trades)
     output_paths = save_symbol_outputs(daily, trades, summary, output_dir, symbol)
@@ -946,6 +1278,7 @@ def run_backtest(file_info, output_dir):
 def main():
     args = parse_args()
     factor_output_dir = args.factor_output_dir.resolve()
+    hourly_dir = args.hourly_dir.resolve()
     output_dir = args.output_dir.resolve()
     factor_files = discover_factor_files(factor_output_dir, args.symbol)
     failures = []
@@ -956,6 +1289,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Factor output directory: {factor_output_dir}", flush=True)
+    print(f"Hourly data directory: {hourly_dir}", flush=True)
     print(f"Backtest output directory: {output_dir}", flush=True)
     print(
         f"Backtest date window: {BACKTEST_START_DATE.date()} to "
@@ -975,6 +1309,7 @@ def main():
         try:
             daily, trades, summary, output_paths = run_backtest(
                 file_info,
+                hourly_dir,
                 output_dir,
             )
             all_daily.append(daily)
