@@ -236,7 +236,7 @@ actual_cover_short_signal_t = cover_short_signal_{t-1}
 - 只有空仓时才会开空。
 - 持有空单时，如果触发平空，平空优先执行。
 
-## 22_high_bias_oi_drop_hourly（小时级）开空条件
+## 22_high_bias_oi_drop_mixed（小时级）开空条件
 
 22 号因子读取小时数据，但均线、回归斜率和波动率仍按交易日口径计算。每个小时先把当日已发生的小时 bar 累计成一根“截至当前小时”的日 K：
 
@@ -317,24 +317,26 @@ or C_t > low_since_entry_t * (1 + 4 * avg_volatility_rate_10_t)
 
 ## 结果
 
+以下累计收益和年化收益均按固定初始本金的单利累加口径计算。
+
 | 21 号因子收益汇总 | 22 号因子收益汇总 | 23 号因子收益汇总 |
 | --- | --- | --- |
 | ![21 号因子收益汇总](../useful_plots/all_symbols_21_high_bias_oi_drop_simple_return_summary.png) | ![22 号因子收益汇总](../useful_plots/all_symbols_22_high_bias_oi_drop_hourly_simple_return_summary.png) | ![23 号因子收益汇总](../useful_plots/all_symbols_23_high_bias_oi_speculation_drop_simple_return_summary.png) |
 
 | 因子 | 年化收益率 | 最大回撤 | 夏普 |
 | --- | ---: | ---: | ---: |
-| `21_high_bias_oi_drop` | 6.82% | -25.33% | 0.57 |
-| `22_high_bias_oi_drop_hourly` | 6.01% | -19.86% | 0.50 |
-| `23_high_bias_oi_speculation_drop` | 6.67% | -25.34% | 0.55 |
+| `21_high_bias_oi_drop` | 7.42% | -18.53% | 0.59 |
+| `22_high_bias_oi_drop_mixed` | 9.53% | -22.60% | 0.70 |
+| `23_high_bias_oi_speculation_drop` | 7.30% | -18.46% | 0.58 |
 
 ### 21_high_bias_oi_drop
 
-![21 号因子等权净值](../useful_plots/all_symbols_21_high_bias_oi_drop_simple_equal_weight_equity.png)
+![21 号因子等权累计收益](../useful_plots/all_symbols_21_high_bias_oi_drop_simple_equal_weight_equity.png)
 
-### 22_high_bias_oi_drop_hourly
+### 22_high_bias_oi_drop_mixed
 
-![22 号因子等权净值](../useful_plots/all_symbols_22_high_bias_oi_drop_hourly_simple_equal_weight_equity.png)
+![22 号因子等权累计收益](../useful_plots/all_symbols_22_high_bias_oi_drop_hourly_simple_equal_weight_equity.png)
 
 ### 23_high_bias_oi_speculation_drop
 
-![23 号因子等权净值](../useful_plots/all_symbols_23_high_bias_oi_speculation_drop_simple_equal_weight_equity.png)
+![23 号因子等权累计收益](../useful_plots/all_symbols_23_high_bias_oi_speculation_drop_simple_equal_weight_equity.png)

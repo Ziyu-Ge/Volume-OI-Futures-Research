@@ -6,7 +6,7 @@ from core.reports import empty_trade_table
 
 
 def add_return_columns(frame):
-    """策略净值 = 长持有基准 + 反向空头覆盖。"""
+    """计算常态做多、信号期反向做空的单期收益和单利曲线。"""
     data = frame.copy()
     open_col = "hourly_open" if "hourly_open" in data.columns else "open"
     bar_open = data[open_col].replace(0, np.nan)
@@ -148,16 +148,18 @@ def summarize_symbol(frame, trades, symbol, factor_id, factor_name, periods_per_
 
 
 def build_portfolio(curves, factor_id, factor_name, periods_per_year):
-    """按每个时间点的可用品种等权汇总。"""
+    """按每个时间点的可用品种等权汇总单期收益。"""
     portfolio = (
         curves.groupby("date", sort=True)
         .agg(
             strategy_return=("strategy_return", "mean"),
             benchmark_return=("benchmark_return", "mean"),
-            excess_return=("excess_return", "mean"),
             symbol_count=("symbol", "nunique"),
         )
         .reset_index()
+    )
+    portfolio["excess_return"] = (
+        portfolio["strategy_return"] - portfolio["benchmark_return"]
     )
     portfolio = add_curves(portfolio)
     portfolio.insert(0, "factor_name", factor_name)
@@ -172,4 +174,3 @@ def build_portfolio(curves, factor_id, factor_name, periods_per_year):
         periods_per_year,
     )
     return portfolio, metric_row
-

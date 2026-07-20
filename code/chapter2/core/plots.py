@@ -95,7 +95,7 @@ def _plot_trade_lines(ax, frame, trades):
 
 
 def plot_strategy_curve(curve, path, title):
-    """单品种策略和基准净值对比。"""
+    """单品种策略和基准累计收益对比。"""
     path = _prepare_path(path)
     fig, ax = plt.subplots(figsize=(12, 5))
     ax.plot(curve["date"], curve["strategy_cumulative_return"], label="strategy")
