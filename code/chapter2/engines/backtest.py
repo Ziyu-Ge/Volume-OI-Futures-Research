@@ -16,7 +16,7 @@ def add_return_columns(frame):
     data["gap_return"] = (bar_open / previous_close - 1).fillna(0)
     data["intraday_return"] = (data["close"] / bar_open - 1).fillna(0)
     if not data.empty:
-        data.loc[data.index[0], ["gap_return", "intraday_return"]] = 0
+        data.loc[data.index[0], "gap_return"] = 0
 
     data["benchmark_return"] = data["gap_return"] + data["intraday_return"]
     data["strategy_net_position"] = 1 + 2 * data["position"]

@@ -6,7 +6,7 @@ from rules.exit_rules import check_short_exit
 
 
 def run_hourly_exit_engine(daily, hourly, entry_config, exit_config, use_speculation=False):
-    """22/24 共用：日频确认开仓，小时频执行和平仓。"""
+    """日频确认开仓，小时频执行和平仓。"""
     entry_daily = add_entry_signals(daily, entry_config, use_speculation)
     frame = build_intraday_frame(hourly)
     frame = attach_daily_entry(frame, entry_daily)

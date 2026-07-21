@@ -13,17 +13,17 @@ ENTRY_CONFIG = EntryConfig(
     ma_long=5,
     ma_trend=7,
     ma_bias_threshold=-0.006,
-    ma_long_bias_threshold=-0.25,
+    ma_long_bias_threshold=-0.05,
     ma_long_bias_cap=0.12,
     oi_slope_window=7,
     oi_slope_threshold=0.003,
     close_slope_window=7,
     close_slope_threshold=0.0065,
     speculation_slope_window=3,
-    speculation_slope_threshold=-0.02,
+    speculation_slope_threshold=-0.013,
     volatility_window=10,
 )
 EXIT_CONFIG = ExitConfig(
-    trailing_multiplier=1.225,
-    entry_loss_volatility_multiplier=1.5,
+    trailing_multiplier=1.215,
+    entry_loss_volatility_multiplier=0.83,
 )

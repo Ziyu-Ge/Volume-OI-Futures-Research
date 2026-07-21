@@ -134,7 +134,7 @@ def plot_return_summary(curves, metrics, path, title):
         _plot_empty(path, title, "No symbols with trades")
         return
 
-    plot_data = plot_data.sort_values("excess_cumulative_return", ascending=True)
+    plot_data = plot_data.sort_values("strategy_cumulative_return", ascending=True)
     y_positions = range(len(plot_data))
     figure_height = max(6, min(24, len(plot_data) * 0.35 + 2))
 
