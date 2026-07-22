@@ -1,292 +1,314 @@
-# 24 号因子开空与平空逻辑报告
+# chapter2 21-24 号因子和 rolling 因子筛选逻辑
 
-本文按当前可执行代码整理 24 号因子 `high_bias_oi_speculation_drop_mixed`。开仓指标使用完整日线计算；小时 bar 只承载日线信号，并负责成交和平仓检查。当前参数已经不同于 23 号因子，因此不能直接沿用“23 号开仓条件”的旧注释。
+本文只说明筛选逻辑和公式，不展开回测收益、图表和代码执行细节。
 
-## 核心结论
+## 1. 统一公式
 
-- 开空：交易日收盘后，均线乖离、持仓斜率、价格斜率和投机度斜率的全部条件必须同时成立；信号挂到该交易日最后一根小时 bar，下一根小时 bar 开盘开空。
-- 平空：持空期间每根小时 bar 收盘检查“波动调整后的开仓亏损线”和“开仓后最低价追踪线”；任一条件成立，下一根小时 bar 开盘平空。
-- 状态机只允许 `0`（无空单）和 `-1`（持有空单），不加仓；若待开空和待平空同时存在，平空优先且不会在同一开盘立即重开。
-- 当波动率有效且非负、开仓价非负时，当前参数下的追踪线不高于开仓亏损线，所以实际平仓由追踪反弹条件主导。
+设第 `d` 个交易日：
 
-## 数据频率与变量
+- `C_d`：收盘价。
+- `H_d`：最高价。
+- `L_d`：最低价。
+- `V_d`：成交量。
+- `OI_d`：持仓量。
 
-设交易日为 `d`，小时 bar 为 `h`：
+### 均线
 
-- `C_d`、`H_d`、`L_d`：日收盘价、最高价、最低价。
-- `V_d`：日成交量，由分钟成交量求和得到。
-- `OI_d`：日持仓量，取该交易日最后一个非空分钟值，聚合后的非正值置为空值。
-- `c_h`、`o_h`、`l_h`：小时收盘价、开盘价、最低价。
-- 夜盘数据归入下一交易日，因此“下一根小时 bar”可能是当晚 21:00，而不一定是下一自然日的日盘开盘。
-
-投机度定义为：
+`n` 日均线：
 
 ```text
-S_d = ln(V_d / OI_d)
+MA(n,d) = 最近 n 个交易日收盘价的平均值
 ```
 
-日线负责计算开空指标和历史波动率；小时线不滚动重算当日开空指标。
-
-## 开空逻辑
-
-### 1. 均线与乖离差
-
-`n` 日收盘均线为：
+两个乖离差：
 
 ```text
-MA(n,d) = mean(C_{d-n+1}, ..., C_d)
+B1_d = C_d / MA(long,d)  - C_d / MA(short,d)
+B2_d = C_d / MA(trend,d) - C_d / MA(long,d)
 ```
 
-24 号因子使用 `MA(2)`、`MA(5)` 和 `MA(7)`。代码先计算收盘价对三条均线的乖离，再构造两个差值：
+直观理解：
 
-```text
-B_25,d
-    = (C_d / MA(5,d) - 1) - (C_d / MA(2,d) - 1)
-    = C_d / MA(5,d) - C_d / MA(2,d)
+- `B1` 看短均线和中均线之间的偏离。
+- `B2` 看中均线和长均线之间的偏离。
 
-B_57,d
-    = (C_d / MA(7,d) - 1) - (C_d / MA(5,d) - 1)
-    = C_d / MA(7,d) - C_d / MA(5,d)
-```
+### 回归斜率
 
-开空要求：
-
-```text
-B_25,d >= -0.006
--0.25 <= B_57,d <= 0.12
-```
-
-这里应按代码的数值边界理解。两个下限允许负值，所以因子名中的 `high_bias` 并不等同于“两个乖离差必须显著为正”。
-
-### 2. 回归斜率
-
-对任意日频序列 `X`，在最近 `n` 日上取 `i = 0, 1, ..., n-1`，普通最小二乘斜率为：
+对任意序列 `X`，在最近 `n` 日做一条直线，斜率记为：
 
 ```text
 beta(X,n,d)
-    = sum((i - mean(i)) * (X_{d-n+1+i} - mean_n(X)))
-      / sum((i - mean(i))^2)
 ```
 
-其中 `mean_n(X)` 是当前 `n` 日窗口内的均值。
-
-持仓量和收盘价使用“斜率除以窗口均值”的归一化斜率：
+代码里价格和持仓用归一化斜率：
 
 ```text
-R(X,n,d) = beta(X,n,d) / mean(X_{d-n+1}, ..., X_d)
+R(X,n,d) = beta(X,n,d) / 最近 n 日 X 的平均值
 ```
 
-24 号因子的条件为：
+所以：
 
 ```text
-R(OI, 7, d) <= 0.003
-R(C,  7, d) <= 0.0065
+R(OI,n,d) = 持仓量斜率 / 最近 n 日平均持仓量
+R(C,n,d)  = 收盘价斜率 / 最近 n 日平均收盘价
 ```
 
-这两个阈值为正，因此代码允许持仓量和收盘价仍小幅上行；原始日回归斜率可分别达到窗口均值的 `0.30%` 和 `0.65%`，并不强制二者下降。
+### 投机度
 
-投机度使用原始回归斜率，不除以窗口均值：
+投机度：
 
 ```text
-beta(S, 3, d) <= -0.02
+S_d = log(V_d / OI_d)
 ```
 
-三点回归时该式可简化为：
+投机度回落条件直接用斜率：
 
 ```text
-beta(S, 3, d) = (S_d - S_{d-2}) / 2
+beta(S,n,d) <= 阈值
 ```
 
-因此只有投机度被明确要求回落。
+### 波动率
 
-### 3. 开空总公式
+平仓用最近 `m` 个已完成交易日的平均日内振幅率，不包含当天：
 
-记 `1(condition)` 为示性函数：条件成立时取 1，否则取 0。日线开空信号是全部条件的交集，所有边界都包含等号：
+```text
+vol_d = mean((H_{d-i} - L_{d-i}) / C_{d-i}), i = 1,2,...,m
+```
+
+## 2. 开空筛选逻辑
+
+所有条件同时满足，才产生开空信号。任一指标历史不足或为空，就不开空。
+
+通用公式：
 
 ```text
 open_short_d = 1(
-       B_25,d >= -0.006
-   and -0.25 <= B_57,d <= 0.12
-   and R(OI, 7, d) <= 0.003
-   and R(C,  7, d) <= 0.0065
-   and beta(S, 3, d) <= -0.02
+       B1_d >= B1下限
+   and B2_d >= B2下限
+   and B2_d <= B2上限, 如果该因子设置了上限
+   and R(OI, oi窗口, d) <= 持仓斜率阈值
+   and R(C,  close窗口, d) <= 价格斜率阈值
+   and beta(S, 投机度窗口, d) <= 投机度斜率阈值, 如果该因子启用投机度
 )
 ```
 
-任一指标因历史不足或数据缺失而为 `NaN` 时，相应比较不成立，最终不开空。
+### 21 号因子
 
-代码另用各项的正部构造 `factor_value`，其中 `[x]_+ = max(x, 0)` 且 `[NaN]_+ = 0`。该值只用于排序和排查，不参与开空判定或仓位大小计算。
+名称：`high_bias_oi_drop`
 
-### 4. 信号确认与成交
-
-开空按以下顺序发生：
+筛选含义：价格偏离均线较高，同时持仓和价格开始回落。
 
 ```text
-交易日 d 的完整日 K 收盘
-    -> 计算 open_short_d
-    -> 只在 d 的最后一根小时 bar 记录待开空
-    -> 下一根小时 bar 开盘，若当前无空单且开盘价非 NaN，则开空
+B1_d >= 0.04
+B2_d >= 0.10
+R(OI, 7, d) <= 0
+R(C,  7, d) <= 0
 ```
 
-成交后：
+21 号不限制 `B2` 上限，也不看投机度。
+
+### 22 号因子
+
+名称：`high_bias_oi_drop_mixed`
+
+筛选含义：和 21 号接近，但持仓回落看得更长，并限制长期乖离不能太高。
 
 ```text
-entry_price = o_{h+1}
-position = -1
-low_since_entry = entry_price
+B1_d >= 0.04
+0.10 <= B2_d <= 0.18
+R(OI, 15, d) <= 0
+R(C,   7, d) <= 0
 ```
 
-持空期间出现新的开空信号不会加仓，该待开空信号会在下一根 bar 被忽略并清空。
+22 号不看投机度。
 
-## 平空逻辑
+### 23 号因子
 
-### 1. 前 10 个完整交易日的波动率
+名称：`high_bias_oi_speculation_drop`
 
-先定义每日振幅率：
+筛选含义：在 21 号/22 号的高乖离、持仓回落、价格回落基础上，再要求投机度回落。
 
 ```text
-range_rate_d = (H_d - L_d) / C_d
+B1_d >= 0.04
+0.10 <= B2_d <= 0.18
+R(OI, 5, d) <= 0
+R(C,  7, d) <= 0
+beta(S, 5, d) <= -0.01
 ```
 
-交易日 `d` 使用的平均波动率严格排除当天，只使用此前 10 个完整交易日：
+### 24 号因子
+
+名称：`high_bias_oi_speculation_drop_mixed`
+
+筛选含义：用更短的均线和更宽松的价格、持仓斜率条件，再要求投机度快速回落。
 
 ```text
-vol_d = mean(range_rate_{d-10}, ..., range_rate_{d-1})
+B1_d >= -0.006
+-0.05 <= B2_d <= 0.12
+R(OI, 7, d) <= 0.003
+R(C,  7, d) <= 0.0065
+beta(S, 3, d) <= -0.013
 ```
 
-同一交易日内所有小时 bar 使用相同的 `vol_d`；跨入新交易日后，该值会更新，并非锁定为开仓日的波动率。
+注意：24 号的 `B1` 和 `B2` 下限可以为负，所以它不是简单筛“乖离必须很高”，而是筛“短中长均线关系落在指定区间内”。
 
-### 2. 更新开仓后最低价
+## 3. 平空筛选逻辑
 
-若开仓价为 `E`，在检查小时 bar `h` 的平空条件之前，代码先把该小时最低价计入：
+开空后，记：
+
+- `E`：开仓价。
+- `L*_t`：开仓后到当前 bar 为止的最低价。
+- `P_t`：当前 bar 收盘价。
+- `vol`：当前交易日对应的历史平均振幅率。
+
+平空有两条线。
+
+### 开仓价止损线
+
+如果 `entry_loss_volatility_multiplier = 0`：
 
 ```text
-L*_h = min(E, l_entry_hour, ..., l_h)
+entry_stop = E
 ```
 
-若本小时最低价缺失，则用本小时收盘价作为候选值。开仓所在小时也会在收盘检查前更新一次 `L*_h`。
-
-### 3. 两条平空阈值
-
-开仓亏损保护线为：
+否则：
 
 ```text
-entry_loss_stop_h = E * (1 + 1.5 * vol_d)
+entry_stop = E * (1 + vol * entry_loss_volatility_multiplier)
 ```
 
-最低价追踪反弹线为：
+### 低点反弹线
 
 ```text
-trailing_stop_h = L*_h * (1 + 1.225 * vol_d)
+trailing_stop = L*_t * (1 + vol * trailing_multiplier)
 ```
 
-在小时 bar `h` 收盘时，平空信号为：
+### 平空总条件
 
 ```text
-cover_short_h = 1(
-       c_h > entry_loss_stop_h
-    or c_h > trailing_stop_h
+cover_short_t = 1(
+       P_t > entry_stop
+    or P_t > trailing_stop
 )
 ```
 
-两项都是严格大于，收盘价刚好等于阈值不会触发。代码只检查小时收盘价；即使小时最高价盘中越线，只要收盘没有越线，也不触发。
+21/23 用日线收盘价检查平空；22/24 用小时线收盘价检查平空。
 
-### 4. 当前参数下两条阈值的关系
+各因子平仓参数：
 
-由最低价定义可知 `L*_h <= E`。当两条阈值有效、`vol_d >= 0` 且 `E >= 0` 时：
+| 因子 | trailing_multiplier | entry_loss_volatility_multiplier |
+| --- | ---: | ---: |
+| 21 | 4.0 | 0 |
+| 22 | 3.5 | 0 |
+| 23 | 4.0 | 0 |
+| 24 | 1.215 | 0.83 |
+
+## 4. 21-24 号因子参数总表
+
+| 因子 | 执行频率 | short/long/trend | B1 下限 | B2 下限 | B2 上限 | 持仓斜率 | 价格斜率 | 投机度斜率 |
+| --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |
+| 21 | 日频 | 5/20/60 | 0.04 | 0.10 | 无 | `R(OI,7)<=0` | `R(C,7)<=0` | 不使用 |
+| 22 | 小时 | 5/20/60 | 0.04 | 0.10 | 0.18 | `R(OI,15)<=0` | `R(C,7)<=0` | 不使用 |
+| 23 | 日频 | 5/20/60 | 0.04 | 0.10 | 0.18 | `R(OI,5)<=0` | `R(C,7)<=0` | `beta(S,5)<=-0.01` |
+| 24 | 小时 | 2/5/7 | -0.006 | -0.05 | 0.12 | `R(OI,7)<=0.003` | `R(C,7)<=0.0065` | `beta(S,3)<=-0.013` |
+
+## 5. rolling 因子筛选逻辑
+
+rolling 因子名称：`factor_24_walk_forward`
+
+rolling 不发明新公式。它仍然使用 24 号因子的开空和平空公式，只是每隔一段时间重新选择参数。
+
+### 滚动窗口
 
 ```text
-trailing_stop_h
-    = L*_h * (1 + 1.225 * vol_d)
-    <= E * (1 + 1.225 * vol_d)
-    <= E * (1 + 1.5 * vol_d)
-    = entry_loss_stop_h
+训练期 = 过去 3 年
+测试期 = 之后 6 个月
+每 6 个月向前滚动一次
 ```
 
-因此，只要开仓亏损线被突破，位置更低的追踪线一定也已被突破。当前正式结果中的开仓价均为正；在上述前提下，开仓亏损条件不会单独触发，平空总公式实际等价于：
+### 参数怎么选
+
+每个训练窗口里，代码会试一批候选参数。每个候选参数都跑一遍训练期回测，然后按下面分数排序：
 
 ```text
-cover_short_h = 1(c_h > trailing_stop_h)
+score = Sharpe - 2.0 * abs(max_drawdown)
 ```
 
-这不是删除了开仓亏损规则，而是当前 `1.225 < 1.5` 的参数关系使其被追踪规则覆盖。
+选择 `score` 最高的参数，拿去跑下一个 6 个月测试期。
 
-### 5. 平空成交
+### 候选参数
 
-小时 bar `h` 收盘触发后，只生成待平空状态；实际在下一根小时 bar 开盘执行：
+候选参数不是全组合搜索，而是：
 
 ```text
-exit_price = o_{h+1}
-position = 0
+基准 24 号参数
++ 每次只改一个字段的参数
 ```
 
-所以两条阈值是收盘判定线，不是保证成交价。若下一根 bar 跳空，回测使用实际下一小时开盘价。平空原因记录为：
+可选值：
 
-| 条件 | `exit_reason` |
+| 参数 | 可选值 |
 | --- | --- |
-| 仅开仓亏损线 | `price_above_entry` |
-| 仅追踪反弹线 | `trailing_rebound` |
-| 两条线同时 | `price_above_entry_and_trailing_rebound` |
+| `ma_short` | 2, 3 |
+| `ma_long` | 5, 7 |
+| `ma_trend` | 7, 10 |
+| `B1下限` | -0.006, -0.003 |
+| `B2下限` | -0.05, -0.03 |
+| `B2上限` | 0.12, 0.10 |
+| `oi_slope_window` | 7, 10 |
+| `oi_slope_threshold` | 0.003, 0.001 |
+| `close_slope_window` | 7, 10 |
+| `close_slope_threshold` | 0.0065, 0.004 |
+| `speculation_slope_window` | 3, 5 |
+| `speculation_slope_threshold` | -0.013, -0.010 |
+| `volatility_window` | 10, 15 |
+| `trailing_multiplier` | 1.215, 1.40 |
+| `entry_loss_volatility_multiplier` | 0.83, 1.00 |
 
-## 小时状态机
-
-每根小时 bar 的处理顺序为：
+一句话总结：
 
 ```text
-1. 在本 bar 开盘执行上一 bar 留下的待平空或待开空；平空优先
-2. 清空待执行标记
-3. 若持有空单，更新开仓后最低价
-4. 用本 bar 收盘价检查平空条件，必要时记录待平空
-5. 若本 bar 是交易日最后一根且日线开空信号成立，记录待开空
+rolling 因子 = 用过去 3 年表现筛出一套 24 号参数，再用这套参数交易未来 6 个月。
 ```
 
-因此：
+## 6. 回测结果展示
 
-- 开空所在小时收盘若触发平空，最早在紧随其后的小时 bar 开盘平空。
-- 同时存在待平空和待开空时，只执行平空，不会在同一开盘重新开空。
-- 下一根 bar 的开盘价若为 `NaN`，待执行信号会被清空，而不是继续顺延。
-- 样本最后一根 bar 产生的待执行信号没有下一根 bar 可成交；期末仍持空的交易记为 `open`。
-- 开空条件本身不要求 `vol_d` 有效。若早期已开空但 10 日历史波动率仍缺失，两条平空线都不可用，该小时不会由这两项触发平空。
+下表使用各因子 `symbol_metrics.csv` 中的 `ALL_SYMBOLS_EQUAL_WEIGHT` 组合行。交易次数使用对应 `trades.csv` 的总交易行数，包含期末仍未平仓的交易。
 
-## 当前结果摘要
-
-现有正式结果位于 `results/chapter2/factor_24/`，当前结果文件时间为 2026-07-20。样本覆盖 2016-01-07 09:00 至 2026-04-24 15:00，共 59 个品种。
-
-| 组合口径 | 年化收益 | 最大回撤 | Sharpe | 期末累计收益 |
+| 因子 | 年化收益率 | 最大回撤 | 夏普 | 交易次数 |
 | --- | ---: | ---: | ---: | ---: |
-| 策略 | 14.57% | -9.97% | 1.40 | 130.95% |
-| 代码中的买入持有基准 | 8.68% | -22.44% | 0.62 | 78.00% |
-| 逐 bar 收益差单利累加 | 5.89% | — | — | 52.95% |
+| 21 | 6.26% | -23.13% | 0.55 | 124 |
+| 22 | 9.53% | -22.60% | 0.70 | 95 |
+| 23 | 5.90% | -23.66% | 0.51 | 62 |
+| 24 | 17.04% | -6.42% | 1.67 | 9352 |
+| 24 rolling | 10.18% | -9.64% | 1.23 | 8064 |
 
-按 `trades.csv` 汇总：
+### 21 号因子 summary
 
-| 项目 | 结果 |
-| --- | ---: |
-| 已平仓交易 | 8,772 笔 |
-| 期末未平仓交易 | 17 笔 |
-| 已平仓交易胜率 | 38.61% |
-| 仅追踪反弹线触发 | 8,375 笔（95.47%） |
-| 两条线同时触发 | 397 笔（4.53%） |
-| 仅开仓亏损线触发 | 0 笔（0.00%） |
+| return summary | all symbols summary |
+| --- | --- |
+| ![21 号因子 return summary](../useful_plots/chapter2_factor_21_return_summary.png) | ![21 号因子 all symbols summary](../useful_plots/chapter2_factor_21_all_symbols_summary.png) |
 
-退出原因分布与上面的阈值支配关系一致。
+### 22 号因子 summary
 
-## 结果口径与限制
+| return summary | all symbols summary |
+| --- | --- |
+| ![22 号因子 return summary](../useful_plots/chapter2_factor_22_return_summary.png) | ![22 号因子 all symbols summary](../useful_plots/chapter2_factor_22_all_symbols_summary.png) |
 
-- 回测中的“无空单”并非持有现金：收益引擎在 `position = 0` 时保持 `+1` 买入持有敞口，在 `position = -1` 时切换为 `-1` 空头敞口。因此结果是“常态做多、信号期反转做空”，不是纯粹的空仓—空头策略。
-- 回测按每个时点可用品种动态等权；各时点覆盖数量为 1—59，2016—2017 年实际只有 IF，期末为 56 个品种。
-- 年化使用代码推断的小时 bar 数，组合采用各品种中的最高频率 `2936.21 bars/year`，按单期收益算术平均乘以年化频率计算，不是 CAGR。
-- 未计手续费、滑点、保证金和合约乘数。单笔空头收益定义为 `entry_price / exit_price - 1`，17 笔未平仓交易不计入胜率。
-- “逐 bar 收益差”按固定初始本金单利累加，其年化和累计收益分别等于策略与基准对应指标之差。
+### 23 号因子 summary
 
-## 对应实现与结果文件
+| return summary | all symbols summary |
+| --- | --- |
+| ![23 号因子 return summary](../useful_plots/chapter2_factor_23_return_summary.png) | ![23 号因子 all symbols summary](../useful_plots/chapter2_factor_23_all_symbols_summary.png) |
 
-- 因子参数：`code/chapter2/factors/factor_24.py`
-- 开空指标与信号：`code/chapter2/rules/entry_rules.py`
-- 均线、斜率、投机度和波动率：`code/chapter2/core/indicators.py`
-- 小时状态机：`code/chapter2/engines/hourly_exit_engine.py`
-- 平空规则：`code/chapter2/rules/exit_rules.py`
-- 收益与交易统计：`code/chapter2/engines/backtest.py`
-- 组合指标：`results/chapter2/factor_24/tables/symbol_metrics.csv`
-- 交易明细：`results/chapter2/factor_24/tables/trades.csv`
-- 组合曲线：`results/chapter2/factor_24/tables/portfolio_curve.csv`
+### 24 号因子 summary
+
+| return summary | all symbols summary |
+| --- | --- |
+| ![24 号因子 return summary](../useful_plots/chapter2_factor_24_return_summary.png) | ![24 号因子 all symbols summary](../useful_plots/chapter2_factor_24_all_symbols_summary.png) |
+
+### 24 rolling 因子 summary
+
+| return summary | all symbols summary |
+| --- | --- |
+| ![24 rolling 因子 return summary](../useful_plots/chapter2_factor_24_rolling_return_summary.png) | ![24 rolling 因子 all symbols summary](../useful_plots/chapter2_factor_24_rolling_all_symbols_summary.png) |
