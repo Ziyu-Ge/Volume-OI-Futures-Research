@@ -14,10 +14,8 @@ ENTRY_CONFIG = EntryConfig(
     ma_trend=60,
     ma_bias_threshold=0.04,
     ma_long_bias_threshold=0.10,
-    ma_long_bias_cap=0.18,
-    oi_slope_window=15,
+    oi_slope_window=7,
     close_slope_window=7,
     volatility_window=10,
 )
 EXIT_CONFIG = ExitConfig(trailing_multiplier=3.5)
-

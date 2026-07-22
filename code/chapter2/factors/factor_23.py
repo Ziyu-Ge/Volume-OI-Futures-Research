@@ -14,7 +14,6 @@ ENTRY_CONFIG = EntryConfig(
     ma_trend=60,
     ma_bias_threshold=0.04,
     ma_long_bias_threshold=0.10,
-    ma_long_bias_cap=0.18,
     oi_slope_window=5,
     close_slope_window=7,
     speculation_slope_window=5,

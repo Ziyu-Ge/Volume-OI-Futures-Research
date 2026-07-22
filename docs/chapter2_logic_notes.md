@@ -6,7 +6,7 @@
 
 这个策略寻找的是：
 
-价格均线仍处在较强的高乖离状态，但最近一段时间持仓量和收盘价都在走弱。21 号是日频基准版本，22 号改成小时级执行，23 号在 21 号基础上增加投机度回落和长期乖离上限过滤。
+价格均线仍处在较强的高乖离状态，但最近一段时间持仓量和收盘价都在走弱。21 号是日频基准版本，22 号改成小时级执行，23 号在 21 号基础上增加投机度回落过滤。
 
 持有空单后，如果价格涨回开仓价上方，或者从开仓以来低点明显反弹，就在下一根可交易 bar 开盘平空。
 
@@ -19,7 +19,6 @@
 | `MA_TREND_WINDOW` | 60 | 21/22/23 | 长期均线窗口 |
 | `MA_BIAS_SPREAD_THRESHOLD` | 0.04 | 21/22/23 | 5 日和 20 日相关乖离差阈值 |
 | `MA_LONG_BIAS_SPREAD_THRESHOLD` | 0.10 | 21/22/23 | 20 日和 60 日相关乖离差下限 |
-| `MA_LONG_BIAS_SPREAD_CAP_THRESHOLD` | 0.18 | 23 | 20 日和 60 日相关乖离差上限 |
 | `REGRESSION_SLOPE_WINDOW` | 7 | 21 | 持仓量和收盘价共用的回归斜率窗口 |
 | `OI_REGRESSION_SLOPE_WINDOW` | 15 | 22 | 持仓量回归斜率窗口 |
 | `OI_REGRESSION_SLOPE_WINDOW` | 5 | 23 | 持仓量回归斜率窗口 |
@@ -279,10 +278,9 @@ or close_t > low_since_entry_t * (1 + 4 * avg_volatility_rate_10_t)
 
 ## 23_high_bias_oi_speculation_drop（日频）开空条件
 
-23 号因子是 21 号的增强版本。它仍然是日频信号、下一交易日开盘执行，但有三处变化：
+23 号因子是 21 号的增强版本。它仍然是日频信号、下一交易日开盘执行，但有两处变化：
 
 - 持仓量回归窗口从 7 日改为 5 日。
-- 长中期乖离差增加上限，要求 `ma_long_bias_spread_t <= 0.18`，避免在过度延伸的强趋势中追空。
 - 增加投机度回落条件，要求最近 5 日投机度回归斜率 `<= -0.01`。
 
 开空信号为：
@@ -290,7 +288,7 @@ or close_t > low_since_entry_t * (1 + 4 * avg_volatility_rate_10_t)
 ```text
 open_short_signal_t =
 ma_bias_spread_t >= 0.04
-and 0.10 <= ma_long_bias_spread_t <= 0.18
+and ma_long_bias_spread_t >= 0.10
 and oi_regression_slope_5_t < 0
 and close_regression_slope_7_t < 0
 and speculation_regression_slope_5_t <= -0.01

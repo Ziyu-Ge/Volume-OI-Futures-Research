@@ -17,7 +17,6 @@ class EntryConfig:
     ma_trend: int = 60
     ma_bias_threshold: float = 0.04
     ma_long_bias_threshold: float = 0.10
-    ma_long_bias_cap: float | None = None
     oi_slope_window: int = 7
     oi_slope_threshold: float = 0.0
     close_slope_window: int = 7
@@ -49,12 +48,6 @@ def add_entry_signals(daily, config, use_speculation=False):
     data["close_slope_signal"] = (
         data["close_slope_rate"] <= config.close_slope_threshold
     ).astype(int)
-    if config.ma_long_bias_cap is None:
-        data["ma_long_bias_spread_cap_signal"] = 1
-    else:
-        data["ma_long_bias_spread_cap_signal"] = (
-            data["ma_long_bias_spread"] <= config.ma_long_bias_cap
-        ).astype(int)
 
     speculation_score = 0
     if use_speculation:
@@ -73,7 +66,6 @@ def add_entry_signals(daily, config, use_speculation=False):
     data["open_short_signal"] = (
         (data["ma_bias_spread_signal"] == 1)
         & (data["ma_long_bias_spread_signal"] == 1)
-        & (data["ma_long_bias_spread_cap_signal"] == 1)
         & (data["oi_slope_signal"] == 1)
         & (data["close_slope_signal"] == 1)
         & (data["speculation_slope_signal"] == 1)

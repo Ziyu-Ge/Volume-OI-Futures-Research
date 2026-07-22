@@ -18,7 +18,6 @@ ENTRY_PARAM_OPTIONS = {
     "ma_trend": [7, 10],
     "ma_bias_threshold": [-0.006, -0.003],
     "ma_long_bias_threshold": [-0.05, -0.03],
-    "ma_long_bias_cap": [0.12, 0.10],
     "oi_slope_window": [7, 10],
     "oi_slope_threshold": [0.003, 0.001],
     "close_slope_window": [7, 10],
