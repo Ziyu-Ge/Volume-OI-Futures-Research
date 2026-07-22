@@ -20,9 +20,7 @@ from engines.hourly_exit_engine import run_hourly_exit_engine
 
 def parse_args():
     parser = argparse.ArgumentParser(description="运行 chapter2 因子。")
-    parser.add_argument(
-        "--factor", choices=["21", "22", "23", "24", "25"], required=True
-    )
+    parser.add_argument("--factor", choices=["21", "22", "23", "24"], required=True)
     parser.add_argument("--daily-dir", type=Path, default=DAILY_DIR)
     parser.add_argument("--hourly-dir", type=Path, default=HOURLY_DIR)
     parser.add_argument("--output-dir", type=Path)
