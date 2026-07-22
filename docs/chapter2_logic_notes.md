@@ -20,7 +20,7 @@
 | `MA_BIAS_SPREAD_THRESHOLD` | 0.04 | 21/22/23 | 5 日和 20 日相关乖离差阈值 |
 | `MA_LONG_BIAS_SPREAD_THRESHOLD` | 0.10 | 21/22/23 | 20 日和 60 日相关乖离差下限 |
 | `REGRESSION_SLOPE_WINDOW` | 7 | 21 | 持仓量和收盘价共用的回归斜率窗口 |
-| `OI_REGRESSION_SLOPE_WINDOW` | 15 | 22 | 持仓量回归斜率窗口 |
+| `OI_REGRESSION_SLOPE_WINDOW` | 7 | 22 | 持仓量回归斜率窗口 |
 | `OI_REGRESSION_SLOPE_WINDOW` | 5 | 23 | 持仓量回归斜率窗口 |
 | `CLOSE_REGRESSION_SLOPE_WINDOW` | 7 | 22/23 | 收盘价回归斜率窗口 |
 | `SPECULATION_REGRESSION_SLOPE_WINDOW` | 5 | 23 | 投机度回归斜率窗口 |
