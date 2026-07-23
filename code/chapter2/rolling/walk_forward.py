@@ -70,7 +70,13 @@ def run_walk_forward(
     oos_curve_parts = []
     oos_trade_parts = []
 
-    for window in windows:
+    for window_index, window in enumerate(windows, start=1):
+        print(
+            f"[窗口 {window_index}/{len(windows)}] "
+            f"训练期 {window['train_start'].date()} 至 {window['train_end'].date()}，"
+            f"样本外 {window['test_start'].date()} 至 {window['test_end'].date()}",
+            flush=True,
+        )
         best_candidate, best_metric, best_score = choose_best_candidate(
             symbol_data, param_candidates, window, drawdown_penalty
         )
@@ -132,7 +138,12 @@ def choose_best_candidate(symbol_data, param_candidates, window, drawdown_penalt
     best_metric = None
     best_score = -np.inf
 
-    for candidate in param_candidates:
+    for candidate_index, candidate in enumerate(param_candidates, start=1):
+        print(
+            f"  评估候选参数 {candidate_index}/{len(param_candidates)}："
+            f"{candidate['changed_field']}",
+            flush=True,
+        )
         result = evaluate_period(
             symbol_data,
             candidate,
@@ -154,7 +165,7 @@ def choose_best_candidate(symbol_data, param_candidates, window, drawdown_penalt
 
 
 def evaluate_period(symbol_data, candidate, start_time, end_time, window_id):
-    """用一套参数跑一个时间段，并按该时间段首笔实际开仓起算。"""
+    """用一套参数跑完整时间段；没有信号时保持基准仓位。"""
     symbol_results = []
     for symbol, data in symbol_data.items():
         frame = run_hourly_segment(
@@ -182,16 +193,10 @@ def evaluate_period(symbol_data, candidate, start_time, end_time, window_id):
     if not symbol_results:
         return None
 
-    start = first_actual_entry_time(symbol_results)
-    if start is None:
-        return None
-
     curves = []
     trades = []
     for item in symbol_results:
-        frame = item["frame"].loc[item["frame"]["date"] >= start].copy()
-        if frame.empty:
-            continue
+        frame = item["frame"].copy()
         frame = backtest.add_return_columns(frame)
         curve = backtest.build_curve_table(
             frame, item["symbol"], FACTOR_ID, FACTOR_NAME
@@ -234,18 +239,6 @@ def run_hourly_segment(daily, hourly, entry_config, exit_config, start_time, end
     frame = build_intraday_frame(hourly_segment)
     frame = attach_daily_entry(frame, entry_daily)
     return run_hourly_state_machine(frame, exit_config)
-
-
-def first_actual_entry_time(symbol_results):
-    entry_times = []
-    for item in symbol_results:
-        trades = item["trades"]
-        if trades.empty:
-            continue
-        entries = trades["entry_time"].dropna()
-        if not entries.empty:
-            entry_times.append(entries.min())
-    return min(entry_times) if entry_times else None
 
 
 def score_metric(metric, drawdown_penalty):

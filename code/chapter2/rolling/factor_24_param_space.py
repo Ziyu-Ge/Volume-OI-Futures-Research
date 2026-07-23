@@ -11,20 +11,19 @@ BASE_EXIT_PARAMS = asdict(EXIT_CONFIG)
 
 
 # 每个 EntryConfig 字段都放在这里，所以每个开仓参数都可以参与滚动调参。
-# 默认只给少量候选值，是为了先让 walk-forward 能在全品种上跑得动。
 ENTRY_PARAM_OPTIONS = {
-    "ma_short": [2, 3],
-    "ma_long": [5, 7],
-    "ma_trend": [7, 10],
-    "ma_bias_threshold": [-0.006, -0.003],
-    "ma_long_bias_threshold": [-0.05, -0.03],
-    "oi_slope_window": [7, 10],
-    "oi_slope_threshold": [0.003, 0.001],
-    "close_slope_window": [7, 10],
-    "close_slope_threshold": [0.0065, 0.004],
-    "speculation_slope_window": [3, 5],
-    "speculation_slope_threshold": [-0.013, -0.010],
-    "volatility_window": [10, 15],
+    "ma_short": [2],
+    "ma_long": [5],
+    "ma_trend": [7],
+    "ma_bias_threshold": [-0.005, 0, 0.005],
+    "ma_long_bias_threshold": [-0.05, 0, 0.05],
+    "oi_slope_window": [7],
+    "oi_slope_threshold": [0, 0.001, 0.002, 0.003],
+    "close_slope_window": [7],
+    "close_slope_threshold": [0, 0.003, 0.005],
+    "speculation_slope_window": [3],
+    "speculation_slope_threshold": [-0.01, -0.015, -0.02],
+    "volatility_window": [10],
 }
 
 
