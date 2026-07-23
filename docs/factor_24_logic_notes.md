@@ -127,7 +127,7 @@ avg_range_d = mean(range_{d-1}, range_{d-2}, ..., range_{d-m})
 vol_d       = mean(range_rate_{d-1}, range_rate_{d-2}, ..., range_rate_{d-m})
 ```
 
-`vol_d` 用在平仓线上。代码中 `m` 来自 `volatility_window`，21-24 当前都是 `10`，rolling 候选值是 `10` 或 `15`。
+`vol_d` 用在平仓线上。代码中 `m` 来自 `volatility_window`，21-24 和当前 rolling 候选参数都固定为 `10`。
 
 ### 开仓信号和因子值
 
@@ -362,6 +362,8 @@ score = Sharpe - 2.0 * abs(max_drawdown)
 
 选择 `score` 最高的参数，拿去跑下一个 6 个月测试期。
 
+训练期和样本外测试期都从各自窗口起点开始完整计入。窗口内没有持仓时，策略收益为 `0`；不会再从该窗口的首笔实际开仓时间开始截断收益曲线。
+
 ### 候选参数
 
 候选参数不是全组合搜索，而是：
@@ -371,24 +373,33 @@ score = Sharpe - 2.0 * abs(max_drawdown)
 + 每次只改一个字段的参数
 ```
 
-可选值：
+因此，不同字段的非基准值不会互相组合。当前共评估 `17` 组候选参数；表中同时列出基准值和单字段变化时可取的值。
 
 | 参数 | 可选值 |
 | --- | --- |
-| `ma_short` | 2, 3 |
-| `ma_long` | 5, 7 |
-| `ma_trend` | 7, 10 |
-| `B1下限` | -0.006, -0.003 |
-| `B2下限` | -0.05, -0.03 |
-| `oi_slope_window` | 7, 10 |
-| `oi_slope_threshold` | 0.003, 0.001 |
-| `close_slope_window` | 7, 10 |
-| `close_slope_threshold` | 0.0065, 0.004 |
-| `speculation_slope_window` | 3, 5 |
-| `speculation_slope_threshold` | -0.013, -0.010 |
-| `volatility_window` | 10, 15 |
+| `ma_short` | 2（固定） |
+| `ma_long` | 5（固定） |
+| `ma_trend` | 7（固定） |
+| `B1下限` | -0.006, -0.005, 0, 0.005 |
+| `B2下限` | -0.05, 0, 0.05 |
+| `oi_slope_window` | 7（固定） |
+| `oi_slope_threshold` | 0, 0.001, 0.002, 0.003 |
+| `close_slope_window` | 7（固定） |
+| `close_slope_threshold` | 0, 0.003, 0.005, 0.0065 |
+| `speculation_slope_window` | 3（固定） |
+| `speculation_slope_threshold` | -0.01, -0.013, -0.015, -0.02 |
+| `volatility_window` | 10（固定） |
 | `trailing_multiplier` | 1.215, 1.40 |
 | `entry_loss_volatility_multiplier` | 0.83, 1.00 |
+
+本次结果共包含 `15` 个样本外窗口。训练期最终选择的参数类型如下：
+
+| 被选中的参数类型 | 窗口数 | 具体情况 |
+| --- | ---: | --- |
+| 基准参数 | 2 | 所有字段都使用 24 号基准值 |
+| `B2下限` | 1 | 取 `0` |
+| `close_slope_threshold` | 7 | 取 `0`、`0.003` 或 `0.005` |
+| `speculation_slope_threshold` | 5 | 取 `-0.015` 或 `-0.02` |
 
 一句话总结：
 
@@ -406,7 +417,7 @@ rolling 因子 = 用过去 3 年表现筛出一套 24 号参数，再用这套�
 | 22 | 7.50% | -28.44% | 0.62 | 171 |
 | 23 | 5.72% | -23.66% | 0.50 | 84 |
 | 24 | 17.04% | -6.42% | 1.67 | 9352 |
-| 24 rolling | 10.18% | -9.64% | 1.23 | 8064 |
+| 24 rolling | 11.21% | -11.68% | 1.26 | 7026 |
 
 ### 21 号因子 summary
 
