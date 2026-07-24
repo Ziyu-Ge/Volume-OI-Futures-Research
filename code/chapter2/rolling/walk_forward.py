@@ -197,7 +197,7 @@ def evaluate_period(symbol_data, candidate, start_time, end_time, window_id):
     trades = []
     for item in symbol_results:
         frame = item["frame"].copy()
-        frame = backtest.add_return_columns(frame)
+        frame = backtest.add_return_columns(frame, item["symbol"])
         curve = backtest.build_curve_table(
             frame, item["symbol"], FACTOR_ID, FACTOR_NAME
         )

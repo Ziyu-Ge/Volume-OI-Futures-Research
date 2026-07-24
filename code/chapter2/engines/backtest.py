@@ -5,7 +5,72 @@ from core.metrics import add_curve_columns, summarize_returns
 from core.reports import empty_trade_table
 
 
-def add_return_columns(frame):
+COMMISSION_RATE = 0.0002
+SLIPPAGE_TICKS = 5
+PRICE_TICK = {
+    "A": 1.0,
+    "AG": 1.0,
+    "AL": 5.0,
+    "AO": 1.0,
+    "AP": 1.0,
+    "AU": 0.02,
+    "B": 1.0,
+    "BR": 5.0,
+    "BU": 2.0,
+    "C": 1.0,
+    "CF": 5.0,
+    "CJ": 5.0,
+    "CS": 1.0,
+    "CU": 10.0,
+    "CY": 5.0,
+    "EB": 1.0,
+    "EG": 1.0,
+    "FG": 1.0,
+    "FU": 1.0,
+    "HC": 1.0,
+    "I": 0.5,
+    "IF": 0.2,
+    "IM": 0.2,
+    "J": 0.5,
+    "JD": 1.0,
+    "JM": 0.5,
+    "L": 1.0,
+    "LC": 20.0,
+    "LH": 5.0,
+    "LU": 1.0,
+    "M": 1.0,
+    "MA": 1.0,
+    "NI": 10.0,
+    "NR": 5.0,
+    "PB": 5.0,
+    "PF": 2.0,
+    "PG": 1.0,
+    "PK": 2.0,
+    "PL": 1.0,
+    "PP": 1.0,
+    "PR": 2.0,
+    "PS": 5.0,
+    "PX": 2.0,
+    "RB": 1.0,
+    "RM": 1.0,
+    "RU": 5.0,
+    "SA": 1.0,
+    "SC": 0.1,
+    "SF": 2.0,
+    "SI": 5.0,
+    "SM": 2.0,
+    "SN": 10.0,
+    "SR": 1.0,
+    "SS": 5.0,
+    "TA": 2.0,
+    "TL": 0.01,
+    "UR": 1.0,
+    "V": 1.0,
+    "ZN": 5.0,
+}
+
+
+def add_return_columns(frame, symbol=None):
     """计算常态做多、信号期反向做空的单期收益和单利曲线。"""
     data = frame.copy()
     open_col = "hourly_open" if "hourly_open" in data.columns else "open"
@@ -25,8 +90,23 @@ def add_return_columns(frame):
         data["previous_strategy_net_position"] * data["gap_return"]
         + data["strategy_net_position"] * data["intraday_return"]
     )
+    data["transaction_cost"] = _transaction_cost_rate(data, symbol, bar_open)
+    data["strategy_return"] = data["strategy_return"] - data["transaction_cost"]
     data["excess_return"] = data["strategy_return"] - data["benchmark_return"]
     return add_curves(data)
+
+
+def _transaction_cost_rate(data, symbol, price):
+    """每次开仓或平仓扣一次单边手续费和滑点。"""
+    trade_times = data["trade_signal"].abs()
+    return trade_times * _one_side_cost_rate(symbol, price)
+
+
+def _one_side_cost_rate(symbol, price):
+    price = pd.Series(price).replace(0, np.nan)
+    tick = PRICE_TICK.get(str(symbol).upper(), 0.0)
+    slippage_rate = SLIPPAGE_TICKS * tick / price
+    return (COMMISSION_RATE + slippage_rate).fillna(0)
 
 
 def add_curves(frame):
@@ -94,7 +174,9 @@ def _trade_row(factor_id, factor_name, symbol, status, open_trade, exit_row):
     exit_price = exit_row["exit_price"]
     trade_return = np.nan
     if pd.notna(entry_price) and pd.notna(exit_price):
-        trade_return = entry_price / exit_price - 1
+        entry_cost = _one_side_cost_rate(symbol, [entry_price]).iloc[0]
+        exit_cost = _one_side_cost_rate(symbol, [exit_price]).iloc[0]
+        trade_return = entry_price / exit_price - 1 - entry_cost - exit_cost
     return {
         "factor_id": factor_id,
         "factor_name": factor_name,

@@ -93,7 +93,7 @@ def combine_outputs(symbol_results, factor):
         frame = trim_frame_from_start(item["frame"], start_time)
         if frame.empty:
             continue
-        frame = backtest.add_return_columns(frame)
+        frame = backtest.add_return_columns(frame, item["symbol"])
         curve = backtest.build_curve_table(
             frame, item["symbol"], factor.FACTOR_ID, factor.FACTOR_NAME
         )
