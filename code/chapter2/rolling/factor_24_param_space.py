@@ -12,25 +12,61 @@ BASE_EXIT_PARAMS = asdict(EXIT_CONFIG)
 
 # 每个 EntryConfig 字段都放在这里，所以每个开仓参数都可以参与滚动调参。
 ENTRY_PARAM_OPTIONS = {
-    "ma_short": [2],
-    "ma_long": [5],
-    "ma_trend": [7],
-    "ma_bias_threshold": [-0.005, 0, 0.005],
-    "ma_long_bias_threshold": [-0.05, 0, 0.05],
-    "oi_slope_window": [7],
-    "oi_slope_threshold": [0, 0.001, 0.002, 0.003],
-    "close_slope_window": [7],
-    "close_slope_threshold": [0, 0.003, 0.005],
-    "speculation_slope_window": [3],
-    "speculation_slope_threshold": [-0.01, -0.015, -0.02],
-    "volatility_window": [10],
+    "ma_short": [7, 9, 10],
+    "ma_long": [10, 12, 15],
+    "ma_trend": [60, 75, 90, 120],
+
+    "ma_bias_threshold": [
+        -0.020,
+        -0.017,
+        -0.014,
+        -0.011,
+        -0.008,
+    ],
+    "ma_long_bias_threshold": [
+        -0.14,
+        -0.12,
+        -0.10,
+        -0.08,
+        -0.06,
+    ],
+
+    "oi_slope_window": [2, 3, 5],
+    "oi_slope_threshold": [
+        -0.018,
+        -0.015,
+        -0.01225,
+        -0.010,
+        -0.0075,
+    ],
+
+    "close_slope_window": [2, 3, 5],
+    "close_slope_threshold": [
+        -0.007,
+        -0.006,
+        -0.00475,
+        -0.0035,
+        -0.0025,
+    ],
+
+    "speculation_slope_window": [24, 30, 36],
+    "speculation_slope_threshold": [
+        -0.009,
+        -0.007,
+        -0.0055,
+        -0.004,
+        -0.002,
+    ],
+
+    "volatility_window": [5, 7, 10, 14],
 }
+
 
 
 # 每个 ExitConfig 字段也放在这里，所以每个平仓参数都可以参与滚动调参。
 EXIT_PARAM_OPTIONS = {
-    "trailing_multiplier": [1.215, 1.40],
-    "entry_loss_volatility_multiplier": [0.83, 1.00],
+    "trailing_multiplier": [2.30, 2.55, 2.80, 3.20],
+    "entry_loss_volatility_multiplier": [1.50, 1.80, 2.00, 2.20, 2.40],
 }
 
 

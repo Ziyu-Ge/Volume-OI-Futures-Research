@@ -9,20 +9,20 @@ USE_SPECULATION = True
 
 # 24 号：23 号开仓条件 + 小时频执行和平仓。
 ENTRY_CONFIG = EntryConfig(
-    ma_short=4,
-    ma_long=13,
-    ma_trend=17,
-    ma_bias_threshold=0.011,
-    ma_long_bias_threshold=0,
-    oi_slope_window=11,
-    oi_slope_threshold=0.0065,
-    close_slope_window=6,
-    close_slope_threshold=0.007,
-    speculation_slope_window=3,
-    speculation_slope_threshold=-0.004,
-    volatility_window=16,
+    ma_short=9,
+    ma_long=12,
+    ma_trend=90,
+    ma_bias_threshold=-0.014,
+    ma_long_bias_threshold=-0.1,
+    oi_slope_window=2,
+    oi_slope_threshold=-0.01225,
+    close_slope_window=2,
+    close_slope_threshold=-0.00475,
+    speculation_slope_window=30,
+    speculation_slope_threshold=-0.0055,
+    volatility_window=7,
 )
 EXIT_CONFIG = ExitConfig(
-    trailing_multiplier=1.7,
-    entry_loss_volatility_multiplier=1.8,
+    trailing_multiplier=2.55,
+    entry_loss_volatility_multiplier=2.2,
 )
