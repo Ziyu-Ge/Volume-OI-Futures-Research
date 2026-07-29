@@ -1,14 +1,13 @@
-"""31 号因子：用 23 号因子识别龙头，做空同板块跟随品种。
+"""32 号因子：23 号信号识别龙头，做空高关系度跟随品种。
 
-逻辑尽量写直白：
-1. 每个品种先计算 factor_23 的开空信号。
-2. 同一天、同板块里，有 23 号信号的品种按 factor_value 最大选一个龙头。
-3. 龙头出现后，找同板块、过去 20 日收益相关性足够高的跟随品种。
-4. 下一交易日开盘做空跟随品种，平仓逻辑和 factor_23 完全一样。
+默认开仓条件沿用 23 号因子；区别是实际开仓品种不直接用触发信号的
+品种，而是选择同板块、过去 20 日收益率相关系数大于阈值的跟随品种。
+平仓逻辑沿用 chapter2 的空头退出规则。
 """
 
 import argparse
 import sys
+from dataclasses import asdict, fields
 from pathlib import Path
 
 import numpy as np
@@ -20,21 +19,45 @@ from config import FLOAT_FORMAT, GROUP, OUTPUT_ENCODING
 ROOT = Path(__file__).resolve().parents[2]
 CHAPTER2_DIR = ROOT / "code" / "chapter2"
 DAILY_DIR = ROOT / "results" / "chapter2" / "tables" / "daily"
-OUTPUT_DIR = ROOT / "results" / "chapter3" / "factor31"
+OUTPUT_DIR = ROOT / "results" / "chapter3" / "factor32"
 
 sys.path.insert(0, str(CHAPTER2_DIR))
-from factors import factor_23  # noqa: E402
+from rules.entry_rules import EntryConfig  # noqa: E402
 from rules.entry_rules import add_entry_signals  # noqa: E402
+from rules.exit_rules import ExitConfig  # noqa: E402
 from rules.exit_rules import check_short_exit  # noqa: E402
 
 
+FACTOR_ID = "32"
+FACTOR_NAME = "high_bias_oi_speculation_drop_high_relation"
+ENGINE = "daily"
+USE_SPECULATION = True
+
+# 32 号：23 号开仓条件 + 高关系度跟随品种过滤，日频执行。
+ENTRY_CONFIG = EntryConfig(
+    ma_short=5,
+    ma_long=20,
+    ma_trend=60,
+    ma_bias_threshold=0.00,
+    ma_long_bias_threshold=0.02,
+    oi_slope_window=5,
+    close_slope_window=7,
+    speculation_slope_window=3,
+    speculation_slope_threshold=-0.005,
+    volatility_window=7,
+)
+EXIT_CONFIG = ExitConfig(
+    trailing_multiplier=2.5,
+    entry_loss_volatility_multiplier=0.0,
+)
+
 LOOKBACK_DAYS = 20
-CORRELATION_THRESHOLD = 0.5
+RELATION_THRESHOLD = 0.35
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="factor31：用 factor23 识别龙头，做空跟随品种"
+        description="factor32：用 23 号式信号识别龙头，做空高关系度跟随品种"
     )
     parser.add_argument("--daily-dir", type=Path, default=DAILY_DIR)
     parser.add_argument("--output-dir", type=Path, default=OUTPUT_DIR)
@@ -42,12 +65,34 @@ def parse_args():
     parser.add_argument("--end", default=None, help="结束日期 YYYY-MM-DD")
     parser.add_argument("--symbols", default=None, help="只处理指定品种，逗号分隔")
     parser.add_argument(
-        "--corr",
+        "--relation",
         type=float,
-        default=CORRELATION_THRESHOLD,
-        help="过去 20 日收益率相关系数阈值",
+        default=RELATION_THRESHOLD,
+        help="过去 20 日收益率相关系数阈值，开仓要求严格大于该值",
     )
+    add_config_arguments(parser, EntryConfig, ENTRY_CONFIG, "entry")
+    add_config_arguments(parser, ExitConfig, EXIT_CONFIG, "exit")
     return parser.parse_args()
+
+
+def add_config_arguments(parser, config_type, default_config, prefix):
+    defaults = asdict(default_config)
+    for field in fields(config_type):
+        option = f"--{prefix}-{field.name.replace('_', '-')}"
+        parser.add_argument(
+            option,
+            type=field.type,
+            default=defaults[field.name],
+            help=f"{config_type.__name__}.{field.name}，默认 {defaults[field.name]}",
+        )
+
+
+def config_from_args(config_type, args, prefix):
+    values = {}
+    for field in fields(config_type):
+        arg_name = f"{prefix}_{field.name}"
+        values[field.name] = getattr(args, arg_name)
+    return config_type(**values)
 
 
 def wanted_symbols(symbols_text):
@@ -85,15 +130,14 @@ def load_all_daily(daily_dir, symbols):
     return data
 
 
-def add_factor23(data_by_symbol):
+def add_configured_entry_signals(data_by_symbol, entry_config):
     result = {}
     for symbol, daily in data_by_symbol.items():
-        frame = add_entry_signals(
+        result[symbol] = add_entry_signals(
             daily,
-            factor_23.ENTRY_CONFIG,
-            factor_23.USE_SPECULATION,
+            entry_config,
+            USE_SPECULATION,
         )
-        result[symbol] = frame
     return result
 
 
@@ -108,7 +152,7 @@ def between_dates(frame, start, end):
 
 def find_leaders(data_by_symbol, start, end):
     rows = []
-    for symbol, frame in data_by_symbol.items():
+    for _, frame in data_by_symbol.items():
         signals = frame.loc[
             frame["open_short_signal"].eq(1) & frame["group"].ne("未分类")
         ].copy()
@@ -141,7 +185,14 @@ def find_leaders(data_by_symbol, start, end):
     return leaders.reset_index(drop=True)
 
 
-def past_correlation(data_by_symbol, leader, follower, signal_date):
+def prior_returns(frame, signal_date):
+    return frame.loc[
+        frame["date"].lt(signal_date),
+        ["date", "daily_return"],
+    ].tail(LOOKBACK_DAYS)
+
+
+def past_relation(data_by_symbol, leader, follower, signal_date):
     leader_returns = prior_returns(data_by_symbol[leader], signal_date)
     follower_returns = prior_returns(data_by_symbol[follower], signal_date)
     paired = leader_returns.merge(
@@ -151,14 +202,8 @@ def past_correlation(data_by_symbol, leader, follower, signal_date):
     )
     if len(paired) < LOOKBACK_DAYS:
         return np.nan
-    return paired["daily_return_leader"].corr(paired["daily_return_follower"])
-
-
-def prior_returns(frame, signal_date):
-    return frame.loc[
-        frame["date"].lt(signal_date),
-        ["date", "daily_return"],
-    ].tail(LOOKBACK_DAYS)
+    relation = paired["daily_return_leader"].corr(paired["daily_return_follower"])
+    return float(relation) if np.isfinite(relation) else np.nan
 
 
 def current_return(data_by_symbol, symbol, signal_date):
@@ -169,7 +214,7 @@ def current_return(data_by_symbol, symbol, signal_date):
     return value.iloc[0]
 
 
-def find_followers(leaders, data_by_symbol, corr_limit):
+def find_high_relation_followers(leaders, data_by_symbol, relation_limit):
     rows = []
     for _, leader in leaders.iterrows():
         leader_symbol = leader["龙头品种"]
@@ -183,8 +228,8 @@ def find_followers(leaders, data_by_symbol, corr_limit):
             if frame.loc[frame["date"].eq(signal_date)].empty:
                 continue
 
-            corr = past_correlation(data_by_symbol, leader_symbol, follower, signal_date)
-            if pd.isna(corr) or corr < corr_limit:
+            relation = past_relation(data_by_symbol, leader_symbol, follower, signal_date)
+            if pd.isna(relation) or relation <= relation_limit:
                 continue
 
             rows.append(
@@ -194,44 +239,23 @@ def find_followers(leaders, data_by_symbol, corr_limit):
                     "龙头品种": leader_symbol,
                     "跟随品种": follower,
                     "龙头得分": leader["龙头得分"],
-                    "20日相关系数": corr,
+                    "20日关系度": relation,
                     "龙头当日收益率": leader["龙头当日收益率"],
                     "跟随当日收益率": current_return(data_by_symbol, follower, signal_date),
                 }
             )
 
     columns = [
-        "信号日", "板块", "龙头品种", "跟随品种", "龙头得分", "20日相关系数",
+        "信号日", "板块", "龙头品种", "跟随品种", "龙头得分", "20日关系度",
         "龙头当日收益率", "跟随当日收益率",
     ]
     if not rows:
         return pd.DataFrame(columns=columns)
     return pd.DataFrame(rows).sort_values(
-        ["信号日", "板块", "龙头品种", "20日相关系数", "跟随品种"],
+        ["信号日", "板块", "龙头品种", "20日关系度", "跟随品种"],
         ascending=[True, True, True, False, True],
         kind="mergesort",
     ).reset_index(drop=True)
-
-
-def make_trades(followers, data_by_symbol):
-    signal_map = follower_signal_map(followers)
-    rows = []
-    for follower, signals in signal_map.items():
-        frame = data_by_symbol[follower]
-        rows.extend(run_one_follower(frame, signals))
-
-    columns = [
-        "信号日", "开空日", "平空日", "板块", "龙头品种", "跟随品种",
-        "开空价", "平空价", "收益率", "平仓原因", "20日相关系数",
-    ]
-    if not rows:
-        return pd.DataFrame(columns=columns)
-    return (
-        pd.DataFrame(rows)
-        .sort_values(["开空日", "跟随品种"])
-        .reset_index(drop=True)
-        .reindex(columns=columns)
-    )
 
 
 def follower_signal_map(followers):
@@ -243,7 +267,28 @@ def follower_signal_map(followers):
     return signal_map
 
 
-def run_one_follower(frame, signals):
+def make_trades(followers, data_by_symbol, exit_config):
+    signal_map = follower_signal_map(followers)
+    rows = []
+    for follower, signals in signal_map.items():
+        frame = data_by_symbol[follower]
+        rows.extend(run_one_follower(frame, signals, exit_config))
+
+    columns = [
+        "信号日", "开空日", "平空日", "板块", "龙头品种", "跟随品种",
+        "开空价", "平空价", "收益率", "平仓原因", "20日关系度",
+    ]
+    if not rows:
+        return pd.DataFrame(columns=columns)
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["开空日", "跟随品种"])
+        .reset_index(drop=True)
+        .reindex(columns=columns)
+    )
+
+
+def run_one_follower(frame, signals, exit_config):
     position = 0
     entry_price = np.nan
     low_since_entry = np.nan
@@ -280,7 +325,7 @@ def run_one_follower(frame, signals):
                 "龙头品种": pending_open["龙头品种"],
                 "跟随品种": pending_open["跟随品种"],
                 "开空价": entry_price,
-                "20日相关系数": pending_open["20日相关系数"],
+                "20日关系度": pending_open["20日关系度"],
             }
 
         pending_open = None
@@ -297,7 +342,7 @@ def run_one_follower(frame, signals):
                 entry_price,
                 low_since_entry,
                 row["avg_volatility_rate"],
-                factor_23.EXIT_CONFIG,
+                exit_config,
             )
             pending_cover = bool(exit_info["cover_signal"])
             pending_exit_reason = exit_info["exit_reason"]
@@ -316,9 +361,7 @@ def summarize(trades):
         return pd.DataFrame(columns=["交易日", "当日收益率", "累计净值", "回撤"]), empty_metrics
 
     daily = trades.groupby("平空日", as_index=False)["收益率"].mean()
-    daily = daily.rename(columns={"平空日": "交易日"})
-    daily = daily.rename(columns={"收益率": "当日收益率"})
-    # 单利口径：每日收益累加，不把前期收益投入后续交易。
+    daily = daily.rename(columns={"平空日": "交易日", "收益率": "当日收益率"})
     daily["累计净值"] = 1.0 + daily["当日收益率"].cumsum()
     daily["回撤"] = daily["累计净值"] / daily["累计净值"].cummax() - 1.0
 
@@ -346,17 +389,38 @@ def write_csv(frame, path):
     )
 
 
+def write_parameters(entry_config, exit_config, relation_limit, output_dir):
+    rows = [
+        {"参数": "FACTOR_ID", "数值": FACTOR_ID},
+        {"参数": "FACTOR_NAME", "数值": FACTOR_NAME},
+        {"参数": "ENGINE", "数值": ENGINE},
+        {"参数": "USE_SPECULATION", "数值": USE_SPECULATION},
+        {"参数": "RELATION_THRESHOLD", "数值": relation_limit},
+    ]
+    rows.extend(
+        {"参数": f"ENTRY_CONFIG.{key}", "数值": value}
+        for key, value in asdict(entry_config).items()
+    )
+    rows.extend(
+        {"参数": f"EXIT_CONFIG.{key}", "数值": value}
+        for key, value in asdict(exit_config).items()
+    )
+    write_csv(pd.DataFrame(rows), output_dir / "parameters.csv")
+
+
 def main():
     args = parse_args()
     start = pd.Timestamp(args.start) if args.start else None
     end = pd.Timestamp(args.end) if args.end else None
+    entry_config = config_from_args(EntryConfig, args, "entry")
+    exit_config = config_from_args(ExitConfig, args, "exit")
 
     data = load_all_daily(args.daily_dir, wanted_symbols(args.symbols))
-    data = add_factor23(data)
+    data = add_configured_entry_signals(data, entry_config)
 
     leaders = find_leaders(data, start, end)
-    followers = find_followers(leaders, data, args.corr)
-    trades = make_trades(followers, data)
+    followers = find_high_relation_followers(leaders, data, args.relation)
+    trades = make_trades(followers, data, exit_config)
     daily_returns, metrics = summarize(trades)
 
     write_csv(leaders, args.output_dir / "leader_signals.csv")
@@ -364,11 +428,14 @@ def main():
     write_csv(trades, args.output_dir / "trades.csv")
     write_csv(daily_returns, args.output_dir / "daily_returns.csv")
     write_csv(metrics, args.output_dir / "metrics.csv")
+    write_parameters(entry_config, exit_config, args.relation, args.output_dir)
 
+    print(f"参数表: {args.output_dir / 'parameters.csv'}")
     print(f"龙头信号: {args.output_dir / 'leader_signals.csv'}")
     print(f"跟随信号: {args.output_dir / 'follower_signals.csv'}")
     print(f"交易明细: {args.output_dir / 'trades.csv'}")
     print(f"绩效指标: {args.output_dir / 'metrics.csv'}")
+    print(f"关系度阈值: > {args.relation:g}")
     print(f"龙头数量: {len(leaders)}")
     print(f"跟随信号数量: {len(followers)}")
     print(f"交易数量: {len(trades)}")

@@ -32,11 +32,11 @@ results/chapter1/evaluation_low_medium_high/tables/summary
 
 | 脚本 | 输出目录 | 输出重点 |
 | --- | --- | --- |
-| `evaluate_signal_win_rate.py` | `results/chapter1/evaluation` | 完整输出，包括总体、分因子、总体置信度、分因子置信度 |
+| `evaluate_signal_win_rate.py` | `results/chapter1/evaluation` | 完整输出，包括总体、分因子、总体信号密度分层、分因子信号密度分层 |
 | `evaluate_signal_win_rate_cluster_last_day.py` | `results/chapter1/evaluation_cluster_last_day` | 只输出信号簇最后一天口径的总体和分因子汇总 |
-| `evaluate_signal_win_rate_low_medium_high.py` | `results/chapter1/evaluation_low_medium_high` | 只输出 `low`、`medium`、`high` 三档置信度汇总 |
+| `evaluate_signal_win_rate_low_medium_high.py` | `results/chapter1/evaluation_low_medium_high` | 只输出 `low`、`medium`、`high` 三档信号密度汇总 |
 
-当前 CSV 中，`evaluation_cluster_last_day` 的 `overall_by_lookahead.csv`、`factor_by_lookahead.csv` 与 `evaluation` 中同名表完全一致；`evaluation_low_medium_high` 的两张 summary 与 `evaluation` 的置信度分层表完全一致，只是文件名更聚焦。
+当前 CSV 中，`evaluation_cluster_last_day` 的 `overall_by_lookahead.csv`、`factor_by_lookahead.csv` 与 `evaluation` 中同名表完全一致；`evaluation_low_medium_high` 的两张 summary 与 `evaluation` 的信号密度分层表完全一致，只是文件名更聚焦。
 
 ## 输入数据
 
@@ -53,7 +53,7 @@ results/chapter1/{factor_run_dir}/tables/factors/{SYMBOL}_{factor_id}_{factor_na
 - 评估价格：`close`
 - 波动率窗口：20 个历史交易日
 - 信号簇最大无信号间隔：10 个交易日
-- 置信度回看窗口：10 个交易日
+- 信号密度回看窗口：10 个交易日
 
 主要字段：
 
@@ -103,9 +103,11 @@ event_date = last_signal_date_in_cluster
 
 这表示把连续或相近的拥挤信号视为一次事件，从信号簇结束处开始观察后续价格表现。若运行时设置 `--cluster-max-gap -1`，每个原始信号会单独计票。
 
-## 置信度分层
+## 近期信号密度分层
 
-脚本按同一品种、所有被选中因子，在近 10 个交易日内出现过信号的交易日数量计算置信度。默认回看窗口由 `--confidence-window-days` 控制，当前默认值为 `10`。
+为避免把信号出现频率误解为预测成功概率，本文统一使用“近期信号密度”这一名称。现有代码字段、CSV 列名和命令参数仍保留 `confidence_*` 命名，以兼容当前程序接口。
+
+脚本按同一品种、所有被选中因子，在近 10 个交易日内出现过信号的交易日数量计算近期信号密度。默认回看窗口由 `--confidence-window-days` 控制，当前默认值为 `10`。
 
 设近 10 个交易日内有 `signal_day_count` 个交易日出现过至少一个信号，则：
 
@@ -120,9 +122,9 @@ confidence_score = min(signal_day_count / 4, 1.0)
 - `medium`：2-3 个信号日。
 - `high`：4 个及以上信号日。
 
-这里的 `high` 更准确地说是“近期信号密集度高”，不是模型主观确信度更高。当前结果里 `high` 组的平均阈值也更高，说明它更多出现在波动较大的环境中。
+这里的 `high` 表示近期出现信号的交易日较多，不表示模型预测成功概率更高。当前结果里 `high` 组的平均阈值也更高，说明它更多出现在波动较大的环境中。
 
-另外，summary 中置信度分层表的基准胜率不是按置信度条件重新筛出的基准，而是同一个无条件基准胜率复制到各置信度组中。
+另外，summary 中信号密度分层表的基准胜率不是按信号密度条件重新筛出的基准，而是同一个无条件基准胜率复制到各信号密度组中。
 
 ## 胜负判断
 
@@ -216,17 +218,17 @@ win_rate_diff_k = strategy_win_rate_k - baseline_win_rate_k
 - 14 号因子：上涨趋势中的追涨拥挤信号，表现与 11 号因子接近。
 - 12、13 号因子：整体仍然有效，但需要结合品种、期限和样本量做二次筛选。
 
-## 当前置信度分层结果
+## 当前信号密度分层结果
 
-`overall_by_confidence.csv` 和 `overall_by_low_medium_high.csv` 显示，置信度分层没有呈现“越高越好”的单调关系。当前样本中，`low` 和 `medium` 的胜率差通常高于 `high`。
+`overall_by_confidence.csv` 和 `overall_by_low_medium_high.csv` 显示，信号密度分层没有呈现“越密集越好”的单调关系。当前样本中，`low` 和 `medium` 的胜率差通常高于 `high`。
 
-| 置信度 | 3 日样本 / 胜率 / 差 | 5 日样本 / 胜率 / 差 | 10 日样本 / 胜率 / 差 |
+| 信号密度等级 | 3 日样本 / 胜率 / 差 | 5 日样本 / 胜率 / 差 | 10 日样本 / 胜率 / 差 |
 | --- | ---: | ---: | ---: |
 | low | 683 / 47.14% / +15.86 pct | 682 / 52.20% / +16.86 pct | 674 / 55.04% / +15.51 pct |
 | medium | 988 / 45.95% / +14.66 pct | 988 / 50.30% / +14.96 pct | 985 / 55.74% / +16.21 pct |
 | high | 730 / 44.25% / +12.96 pct | 729 / 44.86% / +9.52 pct | 729 / 50.34% / +10.81 pct |
 
-10 日窗口下，分因子、分置信度的主要结果如下：
+10 日窗口下，分因子、分信号密度等级的主要结果如下：
 
 | 因子 | low 胜率 / 差 | medium 胜率 / 差 | high 胜率 / 差 |
 | --- | ---: | ---: | ---: |
@@ -257,7 +259,7 @@ results/chapter1/evaluation_low_medium_high/tables/events/signal_cluster_events_
 symbol, factor_id, factor_name, lookahead_days, confidence_level
 ```
 
-事件表保留了每个信号簇事件的完整明细，因此可以继续做品种筛选、最小样本数过滤、跨窗口稳定性检查和分置信度复核。
+事件表保留了每个信号簇事件的完整明细，因此可以继续做品种筛选、最小样本数过滤、跨窗口稳定性检查和分信号密度复核。
 
 ## 输出字段
 
@@ -267,10 +269,10 @@ symbol, factor_id, factor_name, lookahead_days, confidence_level
 - `signal_date`：信号簇最后一天，也是事件日。
 - `signal_close`：事件日收盘价。
 - `cluster_signal_days`：信号簇内的信号日数量。
-- `confidence_level`：事件日置信度分层。
-- `confidence_score`：事件日置信度分数。
-- `confidence_signal_days`：置信度回看窗口内出现过信号的交易日数量。
-- `confidence_recent_dates`：置信度回看窗口内的信号日期。
+- `confidence_level`：事件日信号密度等级。
+- `confidence_score`：事件日信号密度分数。
+- `confidence_signal_days`：信号密度回看窗口内出现过信号的交易日数量。
+- `confidence_recent_dates`：信号密度回看窗口内的信号日期。
 - `threshold`：事件日动态阈值 `theta_t`。
 - `strategy_observation_end_drawdown`：观察窗口最后一天收盘回撤 `ED_{t,k}`，用于判断胜负。
 - `strategy_observation_max_drawdown`：观察窗口内最大回撤 `DD_{t,k}`，只用于观察。
@@ -282,7 +284,7 @@ summary 表统一保留以下字段：
 - `factor_id`：因子 ID；总体汇总为 `ALL_FACTORS`。
 - `factor_name`：因子名称；总体汇总为 `all_factors`。
 - `lookahead_days`：观察窗口。
-- `confidence_level`：置信度分层；非置信度分层表为 `ALL_CONFIDENCE`。
+- `confidence_level`：信号密度等级；不按信号密度分层的表为 `ALL_CONFIDENCE`。
 - `threshold`：分组内可评价事件的平均动态阈值。
 - `strategy_win_rate`：信号胜率。
 - `baseline_win_rate`：基准胜率。
@@ -293,8 +295,8 @@ summary 表统一保留以下字段：
 
 - `overall_by_lookahead.csv`：全部品种、全部因子的总体结果。
 - `factor_by_lookahead.csv`：按因子汇总。
-- `overall_by_confidence.csv`：全部品种、全部因子，按置信度分层汇总。
-- `factor_by_confidence.csv`：按因子和置信度分层汇总。
+- `overall_by_confidence.csv`：全部品种、全部因子，按信号密度等级汇总。
+- `factor_by_confidence.csv`：按因子和信号密度等级汇总。
 
 两个轻量输出目录对应：
 
