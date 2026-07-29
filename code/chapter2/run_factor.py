@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 
 from core import io
-from core.paths import DAILY_DIR, HOURLY_DIR, factor_output_dir
+from core.paths import DAILY_DIR, HOURLY_DIR, RESULTS_DIR, factor_output_dir
 from core.plots import (
     plot_all_symbols,
     plot_return_summary,
@@ -16,16 +16,31 @@ from core.reports import empty_trade_table, output_paths, save_tables
 from engines import backtest
 from engines.daily_engine import run_daily_engine
 from engines.hourly_exit_engine import run_hourly_exit_engine
+from rolling.factor_24_param_space import build_param_candidates
+from rolling.walk_forward import (
+    FACTOR_ID as ROLLING_FACTOR_ID,
+    FACTOR_NAME as ROLLING_FACTOR_NAME,
+    load_symbol_data,
+    run_walk_forward,
+)
+
+
+TRAIN_YEARS = 3
+TEST_MONTHS = 6
+DRAWDOWN_PENALTY = 2.0
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="运行 chapter2 因子。")
-    parser.add_argument("--factor", choices=["21", "22", "23", "24"], required=True)
+    parser.add_argument(
+        "--factor",
+        choices=["21", "22", "23", "24", "24_rolling"],
+        required=True,
+        help="选择要运行的全品种因子。",
+    )
     parser.add_argument("--daily-dir", type=Path, default=DAILY_DIR)
     parser.add_argument("--hourly-dir", type=Path, default=HOURLY_DIR)
     parser.add_argument("--output-dir", type=Path)
-    parser.add_argument("--symbol", action="append", help="可重复传入，默认全部品种。")
-    parser.add_argument("--keep-going", action="store_true")
     return parser.parse_args()
 
 
@@ -33,12 +48,10 @@ def load_factor(factor_id):
     return importlib.import_module(f"factors.factor_{factor_id}")
 
 
-def discover_symbols(factor, daily_dir, hourly_dir, selected):
+def discover_symbols(factor, daily_dir, hourly_dir):
     if factor.ENGINE == "daily":
-        symbols = io.discover_daily_symbols(daily_dir)
-    else:
-        symbols = io.discover_common_symbols(daily_dir, hourly_dir)
-    return io.select_symbols(symbols, selected)
+        return io.discover_daily_symbols(daily_dir)
+    return io.discover_common_symbols(daily_dir, hourly_dir)
 
 
 def run_symbol(symbol, factor, daily_dir, hourly_dir):
@@ -167,40 +180,31 @@ def plot_combined_outputs(output_dir, metrics, curves, portfolio, factor):
     )
 
 
-def main():
-    args = parse_args()
+def run_regular_factor(args):
     factor = load_factor(args.factor)
     output_dir = (args.output_dir or factor_output_dir(factor.FACTOR_ID)).resolve()
     paths = output_paths(output_dir)
-    symbols = discover_symbols(factor, args.daily_dir, args.hourly_dir, args.symbol)
-    failures = []
+    symbols = discover_symbols(factor, args.daily_dir, args.hourly_dir)
     results = []
 
     print(f"运行因子：{factor.FACTOR_ID} {factor.FACTOR_NAME}", flush=True)
+    print(f"品种数量：{len(symbols)}", flush=True)
     print(f"输出目录：{output_dir}", flush=True)
 
     for symbol in symbols:
-        try:
-            frame, trades, periods = run_symbol(
-                symbol, factor, args.daily_dir, args.hourly_dir
-            )
-            results.append(
-                {
-                    "symbol": symbol,
-                    "frame": frame,
-                    "trades": trades,
-                    "periods": periods,
-                }
-            )
-            closed_count = (
-                (trades["status"] == "closed").sum() if not trades.empty else 0
-            )
-            print(f"[{symbol}] 完成，交易数：{closed_count}", flush=True)
-        except Exception as exc:
-            if not args.keep_going:
-                raise
-            failures.append((symbol, exc))
-            print(f"[{symbol}] 失败：{exc}", flush=True)
+        frame, trades, periods = run_symbol(
+            symbol, factor, args.daily_dir, args.hourly_dir
+        )
+        results.append(
+            {
+                "symbol": symbol,
+                "frame": frame,
+                "trades": trades,
+                "periods": periods,
+            }
+        )
+        closed_count = (trades["status"] == "closed").sum() if not trades.empty else 0
+        print(f"[{symbol}] 完成，交易数：{closed_count}", flush=True)
 
     if not results:
         raise RuntimeError("没有任何品种成功完成")
@@ -221,10 +225,70 @@ def main():
     print(f"收益对比图：{paths['return_summary']}", flush=True)
     print(f"全品种图：{paths['summary']}", flush=True)
 
-    if failures:
-        for symbol, exc in failures:
-            print(f"- {symbol}: {exc}", flush=True)
-        raise SystemExit(1)
+
+def run_rolling_factor(args):
+    output_dir = (args.output_dir or RESULTS_DIR / "factor_24_rolling").resolve()
+    paths = output_paths(output_dir)
+    symbols = io.discover_common_symbols(args.daily_dir, args.hourly_dir)
+    candidates = build_param_candidates()
+
+    print("运行因子：24 rolling walk-forward", flush=True)
+    print(f"训练窗口：{TRAIN_YEARS} 年", flush=True)
+    print(f"样本外窗口：{TEST_MONTHS} 个月", flush=True)
+    print(f"候选参数组数：{len(candidates)}", flush=True)
+    print(f"品种数量：{len(symbols)}", flush=True)
+    print(f"输出目录：{output_dir}", flush=True)
+
+    result = run_walk_forward(
+        load_symbol_data(symbols, args.daily_dir, args.hourly_dir),
+        candidates,
+        train_years=TRAIN_YEARS,
+        test_months=TEST_MONTHS,
+        drawdown_penalty=DRAWDOWN_PENALTY,
+    )
+
+    save_tables(
+        output_dir,
+        result["metrics"],
+        result["trades"],
+        result["curves"],
+        result["portfolio"],
+    )
+    selected_params_path = output_dir / "tables" / "selected_params.csv"
+    io.write_csv(result["selected_params"], selected_params_path)
+
+    plot_all_symbols(
+        result["portfolio"],
+        paths["summary"],
+        f"{ROLLING_FACTOR_ID} {ROLLING_FACTOR_NAME} all symbols OOS summary",
+    )
+    plot_return_summary(
+        result["curves"],
+        result["metrics"],
+        paths["return_summary"],
+        f"{ROLLING_FACTOR_ID}_{ROLLING_FACTOR_NAME} OOS return summary",
+    )
+
+    portfolio_row = result["metrics"].loc[
+        result["metrics"]["symbol"] == "ALL_SYMBOLS_EQUAL_WEIGHT"
+    ].iloc[0]
+    print("样本外组合指标：", flush=True)
+    print(f"annual_return={portfolio_row['annual_return']:.6f}", flush=True)
+    print(f"max_drawdown={portfolio_row['max_drawdown']:.6f}", flush=True)
+    print(f"sharpe={portfolio_row['sharpe']:.6f}", flush=True)
+    print(f"参数选择表：{selected_params_path}", flush=True)
+    print(f"汇总表：{paths['metrics']}", flush=True)
+    print(f"交易表：{paths['trades']}", flush=True)
+    print(f"收益对比图：{paths['return_summary']}", flush=True)
+    print(f"全品种图：{paths['summary']}", flush=True)
+
+
+def main():
+    args = parse_args()
+    if args.factor == "24_rolling":
+        run_rolling_factor(args)
+    else:
+        run_regular_factor(args)
 
 
 if __name__ == "__main__":
