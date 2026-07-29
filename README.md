@@ -1,63 +1,72 @@
 # Volume-OI Futures Research
 
-期货量价持仓因子研究仓库。项目从分钟级行情数据出发，先统一聚合全部品种的日频数据，再运行 11、12、13、14 号因子，输出因子表、信号表、汇总表、静态图和组合信号 dashboard。
+期货量价持仓因子研究仓库。项目以 `data/` 下的分钟行情 CSV 为输入，围绕价格、成交量、持仓量和投机度构建信号，并按研究章节组织为三条主线：
+
+- `chapter1`：日频量价持仓信号因子 11-14，生成因子表、信号表、汇总表、组合图和信号胜率评估。
+- `chapter2`：高乖离持仓回落类空头因子 21-24，支持日频开平仓、日频开仓小时级平仓，以及 24 号因子的滚动样本外参数选择。
+- `chapter3`：龙头与跟随品种识别，以及基于跟随信号的做空回测、参数网格和可视化复盘。
 
 ## 项目结构
 
 ```text
 .
 ├── code/
-│   └── chapter1/
-│       ├── 00_prepare_data.py
-│       ├── factors/
-│       │   ├── 11price_up_volume_oi_surge.py
-│       │   ├── 12price_up_speculation_up.py
-│       │   ├── 13price_up_oi_down.py
-│       │   ├── 14uptrend_crowded_chase.py
-│       │   └── volume_price_factor_utils.py
+│   ├── chapter1/
+│   │   ├── 00_prepare_data.py
+│   │   ├── factors/
+│   │   ├── run/run_all.py
+│   │   ├── plot/
+│   │   └── backtest/
+│   ├── chapter2/
+│   │   ├── prepare_data.py
+│   │   ├── run_factor.py
+│   │   ├── factors/
+│   │   ├── rules/
+│   │   ├── engines/
+│   │   ├── rolling/
+│   │   └── core/
+│   └── chapter3/
+│       ├── common/
 │       ├── run/
-│       │   ├── factor_batch_runner.py
-│       │   ├── run_all.py
-│       │   ├── run_11_price_up_volume_oi_surge_all.py
-│       │   ├── run_12_price_up_speculation_up_all.py
-│       │   ├── run_13_price_up_oi_down_all.py
-│       │   └── run_14_uptrend_crowded_chase_all.py
-│       ├── plot/
-│       │   └── plot_combined_signals.py
-│       └── backtest/
-│           ├── evaluate_signal_win_rate.py
-│           ├── evaluate_signal_win_rate_cluster_last_day.py
-│           └── evaluate_signal_win_rate_low_medium_high.py
+│       ├── backtest/
+│       ├── factors/
+│       └── plot/
 ├── data/
 ├── docs/
+├── useful_plots/
 └── results/
-    └── chapter1/
 ```
 
-`data/` 存放原始分钟数据，`results/chapter1/` 存放第一章运行结果。这些数据和批量结果通常不作为源码提交。
+`data/` 存放原始分钟数据，`results/` 存放运行结果。这两个目录通常包含大文件或批量输出，不建议作为源码的一部分提交。
 
 ## 数据要求
 
-原始数据文件放在 `data/{SYMBOL}.csv`，例如：
+原始数据文件放在：
 
 ```text
-data/JD.csv
-data/CU.csv
+data/{SYMBOL}.csv
 ```
 
-CSV 至少需要包含以下字段：
+例如：
+
+```text
+data/CU.csv
+data/JD.csv
+```
+
+CSV 至少需要包含：
 
 ```text
 datetime, open, close, high, low, volume, total_turnover, open_interest
 ```
 
-`code/chapter1/00_prepare_data.py` 会按交易日聚合全部品种，并生成日频字段：
+其中 `chapter3` 的识别主流程最低只使用：
 
 ```text
-date, open, close, high, low, volume, total_turnover, open_interest, speculation
+datetime, open, high, low, close, open_interest
 ```
 
-其中：
+脚本会将 `open_interest <= 0` 视为无效，并在日频/小时频缓存中计算：
 
 ```text
 speculation = log(volume / open_interest)
@@ -65,122 +74,255 @@ speculation = log(volume / open_interest)
 
 ## 环境依赖
 
-项目当前没有包管理文件，可直接使用本机 Python 环境运行脚本。常用依赖包括：
+项目当前没有固定的包管理文件，可直接使用本机 Python 环境运行。常用依赖：
 
 ```bash
 pip install pandas numpy matplotlib plotly
 ```
 
-本机脚本默认使用 `python3`。
+所有命令默认在仓库根目录执行。也可以用当前解释器显式运行：
+
+```bash
+python3 ...
+```
 
 ## 快速开始
 
-在仓库根目录运行。
+### Chapter 1：运行 11-14 号日频因子
 
-### 1. 准备全部品种日频数据
-
-```bash
-python3 code/chapter1/00_prepare_data.py
-```
-
-默认输出：
-
-```text
-results/chapter1/tables/daily/{SYMBOL}_daily.csv
-```
-
-### 2. 运行全部因子和组合图
+一键准备日频缓存、运行全部 11-14 号因子，并生成组合信号图：
 
 ```bash
 python3 code/chapter1/run/run_all.py
 ```
 
-`run_all.py` 会按顺序执行：
+等价流程包括：
 
 ```text
 code/chapter1/00_prepare_data.py
-code/chapter1/run/run_11_price_up_volume_oi_surge_all.py
-code/chapter1/run/run_12_price_up_speculation_up_all.py
-code/chapter1/run/run_13_price_up_oi_down_all.py
-code/chapter1/run/run_14_uptrend_crowded_chase_all.py
+code/chapter1/factors/11price_up_volume_oi_surge.py
+code/chapter1/factors/12price_up_speculation_up.py
+code/chapter1/factors/13price_up_oi_down.py
+code/chapter1/factors/14uptrend_crowded_chase.py
 code/chapter1/plot/plot_combined_signals.py
 ```
 
-### 3. 单独运行某个因子
-
-若日频缓存已经存在，可以单独运行某个因子的全部品种入口：
+单独准备 chapter1 日频缓存：
 
 ```bash
-python3 code/chapter1/run/run_11_price_up_volume_oi_surge_all.py
-python3 code/chapter1/run/run_12_price_up_speculation_up_all.py
-python3 code/chapter1/run/run_13_price_up_oi_down_all.py
-python3 code/chapter1/run/run_14_uptrend_crowded_chase_all.py
+python3 code/chapter1/00_prepare_data.py
 ```
 
-只基于已有结果重新汇总：
+运行信号胜率评估：
 
 ```bash
-python3 code/chapter1/run/run_11_price_up_volume_oi_surge_all.py --collect-only
+python3 code/chapter1/backtest/evaluate_signal_win_rate.py
 ```
 
-使用临时输出目录：
+常用参数示例：
 
 ```bash
-python3 code/chapter1/run/run_11_price_up_volume_oi_surge_all.py --output-dir /tmp/factor11
+python3 code/chapter1/backtest/evaluate_signal_win_rate.py \
+  --factor-ids 11,12,13,14 \
+  --lookahead-days-list 3,5,10 \
+  --cluster-max-gap 10
 ```
 
-### 4. 单独生成组合信号图
+### Chapter 2：运行 21-24 号空头因子
+
+先生成日频缓存：
 
 ```bash
-python3 code/chapter1/plot/plot_combined_signals.py
+python3 code/chapter2/prepare_data.py --frequency daily
 ```
 
-默认读取 `results/chapter1/` 下各因子结果，输出到：
+运行需要小时级平仓的因子前，再生成小时频缓存：
 
-```text
-results/chapter1/combined/
+```bash
+python3 code/chapter2/prepare_data.py --frequency hourly
 ```
 
-## 输出说明
+运行单个因子：
+
+```bash
+python3 code/chapter2/run_factor.py --factor 21
+python3 code/chapter2/run_factor.py --factor 22
+python3 code/chapter2/run_factor.py --factor 23
+python3 code/chapter2/run_factor.py --factor 24
+```
+
+运行 24 号因子的滚动样本外版本：
+
+```bash
+python3 code/chapter2/run_factor.py --factor 24_rolling
+```
+
+指定输入和输出目录：
+
+```bash
+python3 code/chapter2/run_factor.py \
+  --factor 24 \
+  --daily-dir results/chapter2/tables/daily \
+  --hourly-dir results/chapter2/tables/hourly \
+  --output-dir /tmp/factor_24
+```
+
+### Chapter 3：识别龙头和跟随品种
+
+运行小时级龙头/跟随识别：
+
+```bash
+python3 code/chapter3/run/run_identification.py
+```
+
+限制日期或品种：
+
+```bash
+python3 code/chapter3/run/run_identification.py \
+  --start 2024-01-01 \
+  --end 2024-12-31 \
+  --symbols CU,AL,ZN
+```
+
+基于“向下跟随信号”做空回测：
+
+```bash
+python3 code/chapter3/backtest/run_short_backtest.py --fee-rate 0.0001
+```
+
+运行三参数网格：
+
+```bash
+python3 code/chapter3/backtest/run_short_grid.py --fee-rates 0,0.0001
+```
+
+生成网络图和事件复盘页：
+
+```bash
+python3 code/chapter3/plot/visualize.py
+```
+
+chapter3 还包含两个日频跟随策略研究入口：
+
+```bash
+python3 code/chapter3/factors/factor31.py
+python3 code/chapter3/factors/factor32.py
+python3 code/chapter3/backtest/tune_factor32.py
+```
+
+## 输出目录
+
+### Chapter 1
 
 日频缓存：
 
 ```text
-results/chapter1/tables/daily/{SYMBOL}_daily.csv
+results/chapter1/tables/{SYMBOL}_daily.csv
 ```
 
-单个因子的标准输出目录结构：
+因子输出：
 
 ```text
 results/chapter1/{factor_run_dir}/
-  tables/
-    factors/
-    signals/
-    summary/
-  figures/
-    factors/
+  factors/
+  signals/
+  summary/
 ```
 
-主要文件：
-
-```text
-tables/factors/{SYMBOL}_{factor_id}_{factor_name}.csv
-tables/signals/{SYMBOL}_{factor_id}_{factor_name}_signals.csv
-tables/summary/{SYMBOL}_{factor_id}_{factor_name}_summary.csv
-tables/summary/all_symbols_{factor_id}_{factor_name}_summary.csv
-figures/factors/{SYMBOL}_{factor_id}_{factor_name}_signal_on_price.png
-figures/factors/{SYMBOL}_{factor_id}_{factor_name}_factor_value.png
-```
-
-组合输出默认位于：
+组合图和 dashboard：
 
 ```text
 results/chapter1/combined/
 ```
 
-包含跨因子统计表、各品种组合信号 PNG/HTML，以及 dashboard。
+信号胜率评估：
+
+```text
+results/chapter1/evaluation/
+```
+
+### Chapter 2
+
+缓存数据：
+
+```text
+results/chapter2/tables/daily/{SYMBOL}_daily.csv
+results/chapter2/tables/hourly/{SYMBOL}_hourly.csv
+```
+
+标准因子输出：
+
+```text
+results/chapter2/factor_{ID}/
+  tables/
+    symbol_metrics.csv
+    trades.csv
+    curves.csv
+    portfolio_curve.csv
+  figures/
+    signals/
+    strategy/
+    return_summary.png
+    all_symbols_summary.png
+```
+
+滚动样本外输出：
+
+```text
+results/chapter2/factor_24_rolling/
+  tables/selected_params.csv
+  tables/symbol_metrics.csv
+  tables/trades.csv
+  tables/curves.csv
+  tables/portfolio_curve.csv
+  figures/
+```
+
+### Chapter 3
+
+识别结果：
+
+```text
+results/chapter3/identification/
+  leader_results.csv
+  follower_results.csv
+  daily_bars.csv
+```
+
+做空回测：
+
+```text
+results/chapter3/short_backtest/
+  trades.csv
+  daily_returns.csv
+  metrics.csv
+```
+
+参数网格：
+
+```text
+results/chapter3/short_grid/
+```
+
+事件可视化：
+
+```text
+results/chapter3/figures/
+  leader_follower_network.png
+  event_review.html
+```
+
+factor31/factor32 输出：
+
+```text
+results/chapter3/factor31/
+results/chapter3/factor32/
+results/chapter3/factor32_tuning/
+```
 
 ## 当前因子
+
+### Chapter 1
 
 | ID | 因子名称 | 核心含义 |
 | --- | --- | --- |
@@ -189,62 +331,87 @@ results/chapter1/combined/
 | 13 | `price_up_oi_down` | 价格趋势仍强，但高位持仓开始下降 |
 | 14 | `uptrend_crowded_chase` | 上涨趋势中持仓继续增加，成交或振幅异常，刻画追涨拥挤 |
 
-更详细的因子逻辑见 [docs/factor_logic_notes.md](docs/factor_logic_notes.md)。
+### Chapter 2
 
-## 配置与运行机制
+| ID | 因子名称 | 执行频率 | 核心含义 |
+| --- | --- | --- | --- |
+| 21 | `high_bias_oi_drop` | 日频 | 高乖离状态下，持仓和价格同时转弱后开空 |
+| 22 | `high_bias_oi_drop_mixed` | 日频开仓、小时级平仓 | 21 号的小时级退出版本 |
+| 23 | `high_bias_oi_speculation_drop` | 日频 | 在 21 号基础上增加投机度回落过滤 |
+| 24 | `high_bias_oi_speculation_drop_mixed` | 日频开仓、小时级平仓 | 23 号的小时级退出版本 |
+| 24_rolling | `factor_24_rolling` | 样本外滚动 | 对 24 号做 walk-forward 参数选择 |
 
-- 项目不再使用 `config.py`；所有批量入口都运行全部品种。
-- `00_prepare_data.py` 扫描 `data/*.csv`，一次性生成 `results/chapter1/tables/daily/` 下的日频缓存。
-- 因子 runner 从日频缓存发现品种，在子进程中通过环境变量 `SYMBOL` 注入当前品种，因子脚本只读取缓存，不重复聚合分钟数据。
-- `--output-dir` 可控制某个因子的输出目录，`--daily-dir` 可指定日频缓存目录。
-- `RESULTS_OUTPUT_DIR` 和 `CHAPTER1_DAILY_DIR` 是 runner 传给因子子进程的底层环境变量，通常不需要手动设置。
-- Matplotlib 和工具缓存会写入项目内 `.matplotlib/` 和 `.cache/`，避免污染用户全局目录。
+### Chapter 3
 
-## 因子开发约定
+| 模块 | 作用 |
+| --- | --- |
+| `run_identification.py` | 逐小时识别同板块龙头和跟随品种 |
+| `run_short_backtest.py` | 龙头向下时，做空同板块跟随品种 |
+| `run_short_grid.py` | 搜索收益阈值、持仓阈值、相关性阈值 |
+| `factor31.py` | 用 chapter2 的 23 号信号识别龙头，做空相关跟随品种 |
+| `factor32.py` | 23 号式信号 + 高关系度过滤的日频跟随策略 |
+| `tune_factor32.py` | 对 factor32 做参数粗调 |
 
-新增或修改因子时，优先复用 `code/chapter1/factors/volume_price_factor_utils.py` 中的公共函数：
+## 文档
 
-```text
-load_daily()
-past_rank()
-mad_score()
-past_mad_score()
-positive_part()
-add_price_ma_features()
-add_volume_price_features()
-save_factor_outputs()
-```
-
-因子脚本文件名需要以数字 ID 开头，例如：
+更详细的研究说明见：
 
 ```text
-15new_factor_name.py
+docs/chapter1_factor_logic_notes.md
+docs/chapter1_signal_evaluation_notes.md
+docs/chapter2_logic_notes.md
+docs/chapter2_factor_24_logic_notes.md
+docs/chapter3_notes.md
 ```
 
-每个因子建议明确生成：
+`useful_plots/` 存放已筛选出的代表性图表，可用于写报告或快速查看阶段性结论。
 
-- 连续因子值字段 `factor_value`
-- 二值信号字段 `signal`
-- 用于解释信号的关键中间变量 `feature_columns`
+## 运行约定
 
-如果新增因子，通常还需要同步考虑：
+- 所有命令建议从仓库根目录运行。
+- chapter1 的日频缓存默认在 `results/chapter1/tables/`。
+- chapter2 的日频和小时频缓存默认在 `results/chapter2/tables/daily/` 和 `results/chapter2/tables/hourly/`。
+- chapter2 的夜盘数据会归入下一个真实日盘交易日；如果尾部找不到下一个交易日，会用下一个工作日兜底。
+- chapter3 的板块映射集中在 `code/chapter3/common/config.py`；未分类品种可以生成中间数据，但不会参与同板块跟随识别。
+- Matplotlib 和工具缓存会写入项目内缓存目录，避免污染用户全局目录。
 
-- 新增一个 `code/chapter1/run/run_{id}_{factor_name}_all.py` 薄入口，并复用 `code/chapter1/run/factor_batch_runner.py`
-- 更新 `code/chapter1/run/run_all.py`
-- 如需进入组合图，更新 `code/chapter1/plot/plot_combined_signals.py` 的默认 factor id
+## 开发约定
+
+新增或修改因子时，优先复用现有公共模块：
+
+```text
+code/chapter1/factors/volume_price_factor_utils.py
+code/chapter2/rules/
+code/chapter2/engines/
+code/chapter2/core/
+code/chapter3/common/
+```
+
+chapter1 新增因子通常需要：
+
+- 在 `code/chapter1/factors/` 下新增以数字 ID 开头的脚本。
+- 输出 `factor_value` 和 `signal`。
+- 同步更新 `code/chapter1/run/run_all.py`。
+- 如需进入组合图，同步更新 `code/chapter1/plot/` 的默认因子配置。
+
+chapter2 新增因子通常需要：
+
+- 在 `code/chapter2/factors/` 下新增 `factor_{ID}.py`。
+- 明确 `FACTOR_ID`、`FACTOR_NAME`、`ENGINE`、`USE_SPECULATION`、`ENTRY_CONFIG` 和 `EXIT_CONFIG`。
+- 如果新增 engine 或输出口径，优先扩展 `engines/` 和 `core/reports.py`，不要在因子文件里重复写回测流程。
+
+chapter3 新增识别规则或板块配置时，优先放在：
+
+```text
+code/chapter3/common/config.py
+code/chapter3/common/rules.py
+```
+
+策略回测、网格和可视化分别放在 `backtest/`、`factors/` 和 `plot/` 下，避免把研究入口和公共规则混在一起。
 
 ## 时间约定
 
-- 历史分位和 MAD 基准只使用今天以前的数据。
-- 均线、成交量、持仓和投机度条件包含当日收盘后的数据，因此信号应视为当日收盘后确认。
-- 因子脚本只生成信号，不在同一文件中生成下一交易日仓位或交易方向。
-- 后续如果做回测或实盘映射，应在独立模块中使用类似 `trade_signal = signal.shift(1)` 的方式处理。
-
-## 验证命令
-
-项目目前没有测试框架。修改代码后建议先做轻量验证：
-
-```bash
-python3 -m py_compile code/chapter1/00_prepare_data.py code/chapter1/factors/*.py code/chapter1/run/*.py code/chapter1/plot/*.py code/chapter1/backtest/*.py
-python3 code/chapter1/run/run_all.py
-```
+- 历史分位、均值、MAD、相关性和回归基准只使用信号日以前的数据，避免未来函数。
+- chapter1 因子信号应视为当日收盘后确认。
+- chapter2 日频因子通常在信号日收盘后确认，下一交易日开盘执行；小时级退出因子使用小时 bar 判断平仓。
+- chapter3 小时识别只使用当前小时已经可见的数据；做空回测在信号出现后的下一根分钟 K 线开盘入场，当日最后一根分钟 K 线收盘离场。

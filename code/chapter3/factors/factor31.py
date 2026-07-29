@@ -8,24 +8,42 @@
 """
 
 import argparse
+import importlib.util
 import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from config import FLOAT_FORMAT, GROUP, OUTPUT_ENCODING
+CHAPTER3_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CHAPTER3_DIR))
+
+from common.config import FLOAT_FORMAT, GROUP, OUTPUT_ENCODING  # noqa: E402
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 CHAPTER2_DIR = ROOT / "code" / "chapter2"
 DAILY_DIR = ROOT / "results" / "chapter2" / "tables" / "daily"
 OUTPUT_DIR = ROOT / "results" / "chapter3" / "factor31"
 
 sys.path.insert(0, str(CHAPTER2_DIR))
-from factors import factor_23  # noqa: E402
 from rules.entry_rules import add_entry_signals  # noqa: E402
 from rules.exit_rules import check_short_exit  # noqa: E402
+
+
+def load_chapter2_factor_23():
+    spec = importlib.util.spec_from_file_location(
+        "chapter2_factor_23",
+        CHAPTER2_DIR / "factors" / "factor_23.py",
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError("无法加载 chapter2/factors/factor_23.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+factor_23 = load_chapter2_factor_23()
 
 
 LOOKBACK_DAYS = 20

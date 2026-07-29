@@ -4,9 +4,14 @@ import argparse
 import json
 import math
 import os
+import sys
 from pathlib import Path
 
-os.environ.setdefault("MPLCONFIGDIR", str(Path(__file__).resolve().parents[2] / "results" / "chapter3" / ".matplotlib-cache"))
+ROOT = Path(__file__).resolve().parents[3]
+CHAPTER3_DIR = ROOT / "code" / "chapter3"
+sys.path.insert(0, str(CHAPTER3_DIR))
+
+os.environ.setdefault("MPLCONFIGDIR", str(ROOT / "results" / "chapter3" / ".matplotlib-cache"))
 
 import matplotlib
 
@@ -18,7 +23,7 @@ import pandas as pd
 from matplotlib import font_manager
 from matplotlib.patches import FancyArrowPatch
 
-from config import OUTPUT_DIR, ROOT
+from common.config import OUTPUT_DIR  # noqa: E402
 
 
 FIGURE_DIR = ROOT / "results" / "chapter3" / "figures"

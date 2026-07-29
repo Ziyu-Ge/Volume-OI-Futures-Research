@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DATA = ROOT / "data"
 DEFAULT_INPUT = ROOT / "results" / "chapter3" / "identification"
 DEFAULT_OUTPUT = ROOT / "results" / "chapter3" / "short_backtest"

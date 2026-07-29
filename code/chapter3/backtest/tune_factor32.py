@@ -15,10 +15,11 @@ import numpy as np
 import pandas as pd
 
 
-ROOT = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(ROOT / "code" / "chapter3"))
+ROOT = Path(__file__).resolve().parents[3]
+CHAPTER3_DIR = ROOT / "code" / "chapter3"
+sys.path.insert(0, str(CHAPTER3_DIR))
 
-import factor32  # noqa: E402
+from factors import factor32  # noqa: E402
 
 
 OUT_DIR = ROOT / "results" / "chapter3" / "factor32_tuning"

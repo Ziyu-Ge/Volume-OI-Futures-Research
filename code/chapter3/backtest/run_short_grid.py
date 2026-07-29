@@ -10,18 +10,22 @@
 """
 
 import argparse
+import sys
 from itertools import product
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-import rules
-from market_data import prepare_all
-from run_short_backtest import add_entry_prices, calculate_performance
+CHAPTER3_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CHAPTER3_DIR))
+
+from backtest.run_short_backtest import add_entry_prices, calculate_performance  # noqa: E402
+from common.market_data import prepare_all  # noqa: E402
+import common.rules as rules  # noqa: E402
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DATA = ROOT / "data"
 DEFAULT_OUTPUT = ROOT / "results" / "chapter3" / "short_grid"
 EVENT_COLUMNS = ["识别时间", "交易日", "龙头品种", "板块", "方向"]

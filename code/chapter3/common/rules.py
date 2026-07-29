@@ -3,7 +3,7 @@
 import numpy as np
 import pandas as pd
 
-from config import (
+from .config import (
     CORRELATION_THRESHOLD,
     HISTORY_DAYS,
     MIN_CORRELATION_DAYS,

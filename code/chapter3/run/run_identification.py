@@ -1,13 +1,17 @@
 """命令行入口：每小时识别龙头期货和跟涨期货。"""
 
 import argparse
+import sys
 from pathlib import Path
 
 import pandas as pd
 
-from config import DATA_DIR, FLOAT_FORMAT, OUTPUT_DIR, OUTPUT_ENCODING
-from market_data import prepare_all
-from rules import identify_followers, identify_leaders
+CHAPTER3_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CHAPTER3_DIR))
+
+from common.config import DATA_DIR, FLOAT_FORMAT, OUTPUT_DIR, OUTPUT_ENCODING  # noqa: E402
+from common.market_data import prepare_all  # noqa: E402
+from common.rules import identify_followers, identify_leaders  # noqa: E402
 
 
 def parse_args():

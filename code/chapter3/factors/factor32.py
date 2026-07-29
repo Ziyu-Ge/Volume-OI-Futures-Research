@@ -13,10 +13,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import FLOAT_FORMAT, GROUP, OUTPUT_ENCODING
+CHAPTER3_DIR = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CHAPTER3_DIR))
+
+from common.config import FLOAT_FORMAT, GROUP, OUTPUT_ENCODING  # noqa: E402
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 CHAPTER2_DIR = ROOT / "code" / "chapter2"
 DAILY_DIR = ROOT / "results" / "chapter2" / "tables" / "daily"
 OUTPUT_DIR = ROOT / "results" / "chapter3" / "factor32"

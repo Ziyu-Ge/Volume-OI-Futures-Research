@@ -1,9 +1,9 @@
-"""画做空回测净值曲线，并标出有交易的日期。"""
+"""画 factor31 有交易日期的净值曲线。"""
 
 from pathlib import Path
 import os
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 os.environ.setdefault(
     "MPLCONFIGDIR",
     str(ROOT / "results" / "chapter3" / ".matplotlib-cache"),
@@ -17,9 +17,9 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 
-CURVE_FILE = ROOT / "results" / "chapter3" / "short_backtest" / "daily_returns.csv"
-TRADE_FILE = ROOT / "results" / "chapter3" / "short_backtest" / "trades.csv"
-OUT_FILE = ROOT / "results" / "chapter3" / "figures" / "short_backtest_equity.png"
+CURVE_FILE = ROOT / "results" / "chapter3" / "factor31" / "daily_returns.csv"
+TRADE_FILE = ROOT / "results" / "chapter3" / "factor31" / "trades.csv"
+OUT_FILE = ROOT / "results" / "chapter3" / "figures" / "factor31_equity.png"
 
 
 def setup_chinese_font():
@@ -31,14 +31,14 @@ def setup_chinese_font():
 
 def main():
     if not CURVE_FILE.exists() or not TRADE_FILE.exists():
-        raise SystemExit("缺少回测结果，请先运行：python3 code/chapter3/run_short_backtest.py")
+        raise SystemExit("缺少 factor31 结果，请先运行：python3 code/chapter3/factors/factor31.py")
 
     setup_chinese_font()
 
     curve = pd.read_csv(CURVE_FILE, parse_dates=["交易日"])
-    trades = pd.read_csv(TRADE_FILE, parse_dates=["交易日"])
+    trades = pd.read_csv(TRADE_FILE, parse_dates=["平空日"])
 
-    trade_days = trades["交易日"].drop_duplicates()
+    trade_days = trades["平空日"].drop_duplicates()
     trade_points = curve.loc[curve["交易日"].isin(trade_days)]
 
     fig, ax = plt.subplots(figsize=(11, 6))
@@ -53,7 +53,7 @@ def main():
     )
 
     ax.axhline(1, color="#111827", linewidth=1, linestyle="--")
-    ax.set_title("做空回测净值曲线")
+    ax.set_title("factor31 有交易日期净值曲线")
     ax.set_xlabel("交易日")
     ax.set_ylabel("累计净值")
     ax.grid(True, color="#e5e7eb", linewidth=0.8)

@@ -7,7 +7,7 @@
 from pathlib import Path
 import os
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 os.environ.setdefault("MPLCONFIGDIR", str(ROOT / "results" / "chapter3" / ".matplotlib-cache"))
 
 import matplotlib

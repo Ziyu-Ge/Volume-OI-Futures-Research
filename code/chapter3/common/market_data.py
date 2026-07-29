@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from config import GROUP, HISTORY_DAYS, MINUTE_COLUMNS, NUMERIC_COLUMNS
+from .config import GROUP, HISTORY_DAYS, MINUTE_COLUMNS, NUMERIC_COLUMNS
 
 
 def safe_pct_change(current, previous):
