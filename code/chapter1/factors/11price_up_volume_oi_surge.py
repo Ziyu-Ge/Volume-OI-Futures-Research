@@ -233,12 +233,4 @@ save_factor_outputs(
     factor_value_column="price_volume_oi_score",
     signal_column="price_up_volume_oi_surge_signal",
     feature_columns=feature_columns,
-    figure_feature_columns=[
-        "close_rank_20",
-        "ret_5",
-        "oi_change_5_rate_mad_abs_score",
-        "volume_mad_score",
-        "ma5_ma10_bias",
-        "ma10_ma20_bias",
-    ],
 )

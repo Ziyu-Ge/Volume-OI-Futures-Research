@@ -176,14 +176,6 @@ result = save_factor_outputs(
     factor_value_column="speculation_mad_score",
     signal_column="price_up_speculation_up_signal",
     feature_columns=feature_columns,
-    figure_feature_columns=[
-        "ma5",
-        "ma10",
-        "ma20",
-        "speculation_mad_score",
-        "ma5_ma10_bias",
-        "ma10_ma20_bias",
-    ],
 )
 
 

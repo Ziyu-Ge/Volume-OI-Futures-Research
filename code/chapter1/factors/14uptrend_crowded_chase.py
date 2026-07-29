@@ -157,13 +157,4 @@ save_factor_outputs(
     factor_value_column="crowded_chase_score",
     signal_column="uptrend_crowded_chase_signal",
     feature_columns=feature_columns,
-    figure_feature_columns=[
-        "close_rank_20",
-        "close_rank_60",
-        "open_interest_mad_score",
-        "volume_mad_score",
-        "range_mad_score",
-        "ma5_ma10_bias",
-        "ma10_ma20_bias",
-    ],
 )

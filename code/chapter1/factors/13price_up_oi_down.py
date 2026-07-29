@@ -176,15 +176,6 @@ result = save_factor_outputs(
     factor_value_column="log_open_interest_mad_score",
     signal_column="price_up_oi_down_signal",
     feature_columns=feature_columns,
-    figure_feature_columns=[
-        "ma5",
-        "ma10",
-        "ma20",
-        "open_interest_rank_10",
-        "log_open_interest_mad_score",
-        "ma5_ma10_bias",
-        "ma10_ma20_bias",
-    ],
 )
 
 

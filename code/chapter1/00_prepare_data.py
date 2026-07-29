@@ -9,7 +9,7 @@ CODE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CODE_DIR.parents[1]
 DATA_DIR = PROJECT_ROOT / "data"
 CHAPTER_RESULTS_DIR = PROJECT_ROOT / "results" / "chapter1"
-DEFAULT_DAILY_OUTPUT_DIR = CHAPTER_RESULTS_DIR / "tables" / "daily"
+DEFAULT_DAILY_OUTPUT_DIR = CHAPTER_RESULTS_DIR / "tables"
 REQUIRED_COLUMNS = {
     "datetime",
     "open",
