@@ -2,15 +2,7 @@
 /data/
 
 # Generated research outputs; keep the committed chapter1 dashboard assets.
-/results/*
-!/results/chapter1/
-/results/chapter1/*
-!/results/chapter1/combined/
-/results/chapter1/combined/*
-!/results/chapter1/combined/figures/
-/results/chapter1/combined/figures/*
-!/results/chapter1/combined/figures/combined_factor_signals_dashboard.html
-!/results/chapter1/combined/figures/plotly.min.js
+results/
 .DS_Store
 
 # Python / tool caches
