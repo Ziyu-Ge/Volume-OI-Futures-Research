@@ -358,6 +358,4 @@ results/chapter1/{因子运行目录}/
 - `signals/` 只保存 `signal = 1` 的日期和特征。
 - `summary/` 保存单品种及全品种汇总。
 
-综合信号看板：
 
-https://ziyu-ge.github.io/Volume-OI-Futures-Research/results/chapter1/combined/figures/combined_factor_signals_dashboard.html
